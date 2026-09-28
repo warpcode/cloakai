@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "dev",
+  "description": "Development agent. Reviews changes for correctness, security and maintainability, and writes release notes from a diff. Use for code review, pull request feedback, and preparing a release summary.",
+  "version": "0.1.0"
+}

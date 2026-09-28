@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dev",
+  "version": "0.1.0",
+  "description": "Development agent: code review and release notes, compiled from one source for every client.",
+  "author": { "name": "warpcode" },
+  "repository": "https://github.com/warpcode/cloakai",
+  "license": "MIT",
+  "keywords": ["development", "code-review", "release"],
+  "extensions": {
+    "io.github.warpcode.cloakai": {
+      "runtime": "opencode",
+      "image": "cloakai/dev:latest"
+    }
+  }
+}

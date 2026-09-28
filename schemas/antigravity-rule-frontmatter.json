@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Antigravity rule frontmatter",
+  "description": "YAML frontmatter schema for Antigravity rules (rules/<name>.md). Transcribed from https://antigravity.google/docs/rules/ on 2026-09-28; no JSON Schema is published for it. trigger is REQUIRED — an unrecognised value causes the rule to be silently discarded.",
+  "type": "object",
+  "properties": {
+    "trigger": {
+      "type": "string",
+      "description": "Controls how and when the rule activates.",
+      "enum": ["always_on", "model_decision", "glob", "manual"]
+    },
+    "description": {
+      "type": "string",
+      "description": "Required for model_decision. Injected into the prompt index so the agent can decide whether to read the rule."
+    },
+    "globs": {
+      "type": "string",
+      "description": "Required for trigger: glob. Comma-separated file glob patterns, e.g. \"*.py, *_test.py\". Quote patterns starting with * so YAML does not read them as an alias anchor."
+    }
+  },
+  "required": ["trigger"],
+  "additionalProperties": false
+}

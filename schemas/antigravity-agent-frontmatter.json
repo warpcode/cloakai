@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Antigravity agent frontmatter",
+  "description": "YAML frontmatter schema for Antigravity custom subagents (agents/<name>.md). Transcribed from https://antigravity.google/docs/subagents/ on 2026-09-28; no JSON Schema is published for it. Empirically confirmed against agy 1.2.12 in docs/verification/phase-0.md Check 5 — agy does NOT reject unknown keys, so additionalProperties is false here as a matter of forward-compatibility policy, not observed enforcement.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique identifier for the custom agent. Required."
+    },
+    "description": {
+      "type": "string",
+      "description": "Used by the planner to decide when to delegate. Required."
+    },
+    "tools": {
+      "type": "array",
+      "description": "Explicit allowlist of permitted tools, e.g. view_file, replace_file_content, grep_search, run_command.",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "mainAgent": {
+      "type": "boolean",
+      "description": "Whether the agent may be selected as the primary agent in chat interfaces.",
+      "default": true
+    },
+    "subagent": {
+      "type": "boolean",
+      "description": "Whether the agent may be invoked via the invoke_subagent tool.",
+      "default": true
+    },
+    "model": {
+      "type": "string",
+      "description": "Model tier used when invoked.",
+      "enum": ["inherit", "flash", "pro"],
+      "default": "inherit"
+    },
+    "commandExecutionPolicy": {
+      "type": "string",
+      "description": "Auto-execution policy for shell commands.",
+      "enum": ["off", "auto", "eager", "sandbox"],
+      "default": "sandbox"
+    },
+    "mcpServers": {
+      "type": "array",
+      "description": "Custom MCP servers configured for this subagent.",
+      "items": { "type": "object" },
+      "default": []
+    },
+    "skills": {
+      "type": "array",
+      "description": "Skill paths, e.g. skills/my-helper-skill.",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "plugins": {
+      "type": "array",
+      "description": "Plugin dependencies.",
+      "items": { "type": "string" },
+      "default": []
+    }
+  },
+  "required": ["name", "description"],
+  "additionalProperties": false
+}

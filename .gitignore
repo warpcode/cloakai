@@ -5,5 +5,13 @@ __pycache__/
 .mypy_cache/
 .ipynb_checkpoints/
 *.egg-info/
-dist/
 build/
+
+# dist/ is deliberately COMMITTED in this phase so a clone is immediately
+# installable. Do not add it here. Issue #16 moves it to CI-generated; when that
+# happens this comment goes with it.
+#
+# The negation is needed because a GLOBAL gitignore also lists dist/. Per-directory
+# .gitignore outranks core.excludesFile, so this wins — but verify with
+# `git check-ignore -v dist/dev/plugin.json` if dist/ ever goes missing again.
+!dist/
