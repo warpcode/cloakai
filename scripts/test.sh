@@ -156,6 +156,22 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- conformance
+# A real client loading what we generated. This is the only layer that can catch
+# "the client silently dropped it", which is the failure the whole compiler
+# exists to prevent. Needs the built conformance image; skipped, never failed,
+# when Docker or the network is absent.
+head_ "client conformance"
+if [ "${SKIP_CONFORMANCE:-0}" = "1" ]; then
+  sk "skipped via SKIP_CONFORMANCE=1"
+elif ! command -v docker >/dev/null 2>&1; then
+  sk "docker not available"
+elif ./scripts/conformance.sh; then
+  ok "a real client loaded the generated plugin"
+else
+  no "A REAL CLIENT REJECTED OUR OUTPUT — see the failure above"
+fi
+
 # ---------------------------------------------------------------- summary
 head_ "summary"
 printf '  %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"

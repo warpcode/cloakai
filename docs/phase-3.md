@@ -135,6 +135,7 @@ projects that share the `cloakai-internal` network.
 - [x] The project directory mount strategy documented, and why it was chosen
 - [x] `scripts/dev.sh` supports `up`, `logs`, `down`, `shell`, `test` (plus `ps`)
 - [x] README documents the topology and states plainly that nothing is automated yet
+- [x] A real client (OpenHands) loads the generated skills **and sees a non-empty `tools/list`**
 - [x] `agents/README.md` rewritten — the "config file name is not fixed yet" ambiguity is gone, and
       the file now describes the container rather than re-asserting a resolved question
 - [x] The Phase 2 isolation tests still pass unchanged under compose
@@ -143,9 +144,13 @@ projects that share the `cloakai-internal` network.
 
 ## Not done, and not pretending
 
-- **VS Code / OpenHands / Claude Code still have not loaded the generated plugin.** Carried
-  unchanged from Phase 1; it is the one acceptance criterion in this project still outstanding from
-  an earlier phase, and it needs a client that is actually installed.
+- **VS Code has still not loaded the generated plugin, and there is a concrete reason.** A
+  containerised test is technically possible — code-server ships the agent-plugins system
+  (`chat.pluginLocations`, `agentPluginsHome`, `componentPaths` are all present in its workbench) —
+  but its workbench is lazy-loaded and only starts on a browser connection, and the chat subsystem
+  that consumes the plugin needs the Copilot extension authenticated. **The blocker is a signed-in
+  session, not an install**, so a container does not unblock it.
+  OpenHands is now covered for real; see `scripts/conformance.sh`.
 - **No gateway.** The client-facing MCP URL in the generated plugins points at
   `cloakai-gateway:4483`, which Phase 3 does not serve. The *container's* MCP endpoint works and is
   verified above; only the address a client would use is still aspirational.

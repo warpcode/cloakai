@@ -204,9 +204,19 @@ proxy in front of it. Phase 3 (Compose integration and a stable gateway address)
 MCP endpoint in the generated plugins points at a hostname the gateway does not serve yet —
 `tools/list` against the generated config will not resolve until then.
 
-`./scripts/test.sh` runs both layers: compiler correctness and determinism (fast, no Docker), and
-container isolation (needs the image and the network). Each reports its own result so a missing
-prerequisite is a skip, never a silent pass.
+`./scripts/test.sh` runs three layers: compiler correctness and determinism (fast, no Docker),
+container isolation (needs the image and the network), and **client conformance** — a real,
+pinned OpenHands loading the generated skills and calling `tools/list` against the running agent.
+
+That third layer matters more than its size suggests. Every other check tests our output against our
+own expectations, which cannot catch "the client silently dropped it" — the exact failure the whole
+compiler exists to prevent. It is a skip, never a silent pass, when Docker or the network is absent.
+
+**VS Code is the one client not covered.** A containerised test is possible in principle
+(code-server ships the agent-plugins system) but its workbench is lazy-loaded and the chat subsystem
+needs an authenticated Copilot session — the blocker is a signed-in session, not an install. It is
+covered instead by static analysis of the shipped workbench bundle; see
+[docs/verification/phase-0.md](docs/verification/phase-0.md) Check 2.
 
 Issues: [#11 epic](https://github.com/warpcode/cloakai/issues/11) ·
 [#12 Phase 0](https://github.com/warpcode/cloakai/issues/12) ·
