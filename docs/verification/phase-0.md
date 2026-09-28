@@ -3,9 +3,9 @@
 **Issue:** [#12](https://github.com/warpcode/cloakai/issues/12) · **Epic:** [#11](https://github.com/warpcode/cloakai/issues/11)
 **Date:** 2026-09-28 · **Host:** Linux 5.x, Docker 29.8.1, Compose v5.5.1
 
-Every command below was run on the host. Reproduce with the files in
-[`probes/`](probes/). No production code was written, and **no fix for any failing check was
-implemented** — per the issue's non-goals.
+Every command below was run on the host. Reproduce with the files in [`probes/`](probes/). No
+production code was written, and no fix was required — all five checks pass, so nothing invalidated a
+design decision. Per the issue's non-goals, nothing was implemented as a fix either way.
 
 ---
 
@@ -14,14 +14,14 @@ implemented** — per the issue's non-goals.
 | # | Check | Verdict | Consequence |
 |---|-------|---------|-------------|
 | 1 | `docker agent serve mcp` non-interactive in a container | **PASS** (with corrections) | Container `mcp` mode is viable |
-| 2 | Conformant clients load non-loopback `http://` MCP URL | **PARTIAL** | opencode + OpenHands pass; **VS Code untested** |
+| 2 | Conformant clients load non-loopback `http://` MCP URL | **PASS** (3 of 3 clients) | No client enforces the HTTPS rule |
 | 3 | Harness CLI under isolation flags | **PASS** | Needs **four** tmpfs mounts, not one |
 | 4 | Model call from an `internal: true` network | **PASS** | Isolation claim holds |
 | 5 | agy agents/rules frontmatter schema | **PASS** | Schema obtained; **epic's extra-fields claim is wrong** |
 
-**Exit criteria from the issue:** Check 5 passed and Checks 1–4 attempted. Satisfied. Checks 1, 3, 4
-and 5 all passed, so there is no blocking design decision. **Check 2 is the one open item** and it is
-not fully resolved — see [Check 2](#check-2--do-conformant-clients-load-a-non-loopback-http-mcp-url).
+**Exit criteria from the issue:** Check 5 passed and Checks 1–4 attempted. Satisfied. All five checks
+now carry an explicit PASS/FAIL verdict, and all five pass, so there is no blocking design decision.
+**No check failed, so there is nothing to write up as invalidating a design decision.**
 
 ---
 
@@ -172,8 +172,9 @@ It does not spawn a container per call — which is precisely why cloakai wraps 
 
 ## Check 2 — Do conformant clients load a non-loopback `http://` MCP URL?
 
-**Verdict: PARTIAL.** opencode and OpenHands both connect to `http://172.19.0.3:8081/mcp`. **VS Code was
-not tested.** See [What remains open](#what-remains-open-for-check-2) at the end.
+**Verdict: PASS.** All three clients were checked, and none enforces the spec's HTTPS rule.
+opencode and OpenHands were tested by live connection; VS Code was checked by static analysis of the
+shipped workbench bundle, since its `MCP: List Servers` view is GUI-only.
 
 The MCP server was left running on `p0_internal` at `172.19.0.3:8081` throughout, using
 [`probes/plugin/mcp.json`](probes/plugin/mcp.json) as the throwaway non-loopback entry:
@@ -246,31 +247,53 @@ Tested against `openhands-ai 1.11.0` / `openhands-sdk 1.34.0`, installed in
 statement, may have been relaxed, or may apply to a config surface this test did not exercise. Treat
 this as *good news with a caveat*, not as the constraint being abolished.
 
-### VS Code — NOT TESTED
+### VS Code — PASS (static analysis)
 
-`code` 1.139.1 with `ms-azuretools.vscode-azure-github-copilot` 1.0.236 is installed, but the
-`MCP: List Servers` view is GUI-only and there is no CLI surface that reports whether a plugin's MCP
-entry was accepted. A throwaway plugin was staged under `~/vscode-p0/` but never loaded.
+`code` 1.139.1 with `ms-azuretools.vscode-azure-github-copilot` 1.0.236. There is no CLI surface that
+reports whether a plugin's MCP entry was accepted, so this was checked by reading the shipped
+workbench bundle — `MCP: List Servers` is GUI-only.
 
-The remaining evidence would require reading the shipped extension bundle to see whether it enforces
-the HTTPS rule. That was **not** done. The behaviour of VS Code against a non-loopback `http://` MCP
-entry is therefore **unverified**, and the epic's "VS Code's behaviour is undocumented" still stands.
+**The Copilot extension does not parse MCP config at all.** Its bundle contains 12 occurrences of
+`mcp` and **zero** of `mcpServer` or `mcpServers`; the hits are unrelated (an Azure
+`resourceintelligencemcp` endpoint and a domain blocklist). No `MUST use HTTPS` string, no
+`validateMcpUrl`, no `mcpUrl` symbol. So the question is settled in VS Code core, not the extension.
 
-### What remains open for Check 2
+**VS Code core has two distinct config paths, and neither enforces the rule.**
 
-VS Code is the one target whose `http://` behaviour is unknown, and it is a *functional* unknown, not a
-paperwork one — the failure mode is a plugin that loads its skills but has no MCP tools. The decision
-in #12 is to allow HTTP for now and treat the mitigation as a future issue, which stands. If VS Code
-turns out to drop the entry, the mitigation order from the issue applies unchanged:
+*Workspace/user `.mcp.json`* — validated by `uBe`, which enforces **shape only**: allowed keys
+(`type`, `url`, `headers`, `transport` for http), non-empty string `url`, `transport` must be `"http"`.
+There is **no protocol check anywhere in the function** — `http://172.19.0.3:8081/mcp` passes
+validation:
 
-1. Make the gateway reachable as loopback from the client (SSH or local port-forward).
-2. Ship a stdio shim in the plugin — `"command": "./bin/cloakai", "args": ["--gateway", "http://…"]` —
-   so the URL lives in `args`, which the spec treats as an opaque string.
+```js
+// decompiled from workbench.desktop.main.js — the whole validator
+if (s.inputs !== undefined && (!Array.isArray(s.inputs) || s.inputs.length > 0)) return o("inputs");
+var e = s.config;
+if (!qIe(e)) return o("configuration");
+var t = e.type ?? (typeof e.command == "string" ? "stdio" : "http");
+if (t !== "stdio" && t !== "http") return o("type");
+var i = t === "stdio" ? new Set(["type","command","args","env"])
+                      : new Set(["type","url","headers","transport"]);
+for (var n of Object.keys(e)) if (!i.has(n) && e[n] !== undefined) return o(n);
+if (t === "stdio") { /* command/args/env type checks */ }
+else {
+  if (typeof e.url != "string" || !e.url.trim()) return o("url");
+  if (e.transport !== undefined && e.transport !== "http") return o("transport");
+  if (e.headers !== undefined && (!qIe(e.headers) || /* … */)) return o("headers");
+}
+```
 
-**Recommendation:** do not let Phase 1 block on this. Emit `http://`, and resolve the VS Code question
-when the compiler's client matrix is first exercised against a real VS Code install.
+*Agent-plugin `mcp.json`* — the format-3 descriptor maps `mcpServers: "mcp.json"` at the plugin root,
+and the reader (`bKo` → `mIe`) is a permissive field-extractor: it takes `url` if it is a string and
+otherwise falls back to `stdio` when `command` is present. No scheme validation, no allowlist, no
+error path. A malformed entry is dropped, not rejected.
 
----
+The only HTTPS-vs-loopback logic in the bundle (`_cn`) is a **fetch-routing optimisation for MCP
+resource reads**, not a config gate — it decides whether to fetch a URI directly or delegate to the
+server, and it is reached only *after* a server is already running.
+
+So VS Code loads the non-loopback `http://` entry. The residual risk is ordinary TLS-less transport on
+an internal network, which is the trade-off the epic already accepted.
 
 ## Check 3 — Does the harness CLI run under the intended isolation flags?
 
@@ -587,16 +610,26 @@ which the container cannot express.
 
 Nothing blocking. Phase 1 can proceed, with these corrections carried forward:
 
-1. **Image references in the epic are wrong.** `docker/docker-agent` and the opencode image are both
-   published on Docker Hub, not ghcr.io. Any Dockerfile or compose file in Phase 1–2 must use the
-   correct registry. *(Epic correction, not a design change.)*
+1. **One image reference in the epic is wrong, and the other does not exist.** `docker/docker-agent` is
+   published on Docker Hub, not ghcr.io (which 401s) — use `docker/docker-agent:latest`. For opencode
+   there is **no official image on any registry**: `ghcr.io/sst/opencode` 401s, and Docker Hub has only
+   unverified third-party images. Use the purpose-built
+   [`probes/Dockerfile.oc`](probes/Dockerfile.oc) from Check 3, which is the only version verified to
+   work under the isolation flags. *(Epic correction, not a design change.)*
 2. **`serve mcp` in a container needs `--insecure-no-auth` or `--auth-token`.** The issue's Check 1
    command omits both and fails outright.
 3. **The isolation flag set needs four tmpfs mounts**, and the opencode image needs a purpose-built
    Dockerfile with the binary relocated out of `/root/.opencode/`. The published-image path is dead.
 4. **agy frontmatter is permissive** — unknown keys do not break loading. The Phase 1 generator can be
    simpler than the epic assumes.
-5. **Check 2 remains open for VS Code only.** opencode and OpenHands both accept non-loopback `http://`.
-   Proceed with `http://`; the stdio-shim mitigation stays as the future-issue fallback.
+5. **No client enforces the spec's HTTPS rule.** opencode and OpenHands both connect to non-loopback
+   `http://`, and VS Code's plugin `mcp.json` reader has no protocol validation at all. Emit `http://`
+   directly; the stdio-shim mitigation is no longer indicated by any evidence, and stays available only
+   for clients not tested here.
 
-No fix for any finding was implemented, per the issue's non-goals.
+All five checks pass, so the issue's condition for reporting a design-invalidation write-up is not
+met and no fix was required or implemented, per the issue's non-goals.
+
+The one caveat worth carrying forward is that VS Code was settled by **static analysis of one build**
+(1.139.1 + Copilot 1.0.236), not by a live GUI load. A future release could add validation. Re-running
+the bundle check is cheap and is the right move if the VS Code target ever misbehaves in Phase 1.
