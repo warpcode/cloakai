@@ -55,6 +55,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Without this, `docker compose up --wait` treats the service as ready the
+    # moment it starts, so `dev.sh up` would report success before the proxy can
+    # answer a request. The liveliness endpoint is the proxy's own.
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5).status==200 else 1)\" || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
     restart: unless-stopped
 
   # The credential store. internal ONLY: the agent can reach it, and it cannot
@@ -88,6 +97,12 @@ services:
     volumes:
       - ./mock-upstream.py:/srv/upstream.py:ro
     networks: [egress]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4001/v1/models', timeout=5).status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     profiles: ["test"]
 
   # On both networks, deliberately. This is a capability container: it can reach
@@ -98,6 +113,62 @@ services:
     entrypoint: ["sleep", "3600"]
     networks: [internal, egress]
     profiles: ["test"]
+
+  # ---------------------------------------------------------------------
+  # The agent.
+  #
+  # EVERY isolation flag below is also in agents/isolation-flags, and they are
+  # kept in step deliberately. Compose has no way to read that file, so the two
+  # cannot literally share a source; scripts/dev.sh and scripts/isolation-tests.sh
+  # both verify they agree, and a mismatch fails the build rather than shipping a
+  # compose service that is less isolated than the one you tested.
+  #
+  # The project directory is an env var, not a fixed path, with `.` as the default.
+  # A hardcoded path here is the kind of thing that quietly breaks someone six
+  # months later when they check the repo out elsewhere. See "How this fits
+  # together" in the README.
+  # ---------------------------------------------------------------------
+  dev-agent:
+    image: ${AGENT_IMAGE:-cloakai/dev:latest}
+    command: ["mcp"]
+    volumes:
+      # The ONE intentional exception to "no host mounts". Scoped to a single
+      # project directory, by choice, not by anything the spec enforces.
+      - ${AGENT_PROJECT:-..}:/workspace
+    working_dir: /workspace
+    # --read-only with four tmpfs mounts, one per writable path the agent needs
+    # (/tmp, /root/.local, /root/.config, /root/.cache). Each is required and each
+    # was found by reading the next EROFS. See docs/verification/phase-0.md.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /root/.local
+      - /root/.config
+      - /root/.cache
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+    mem_limit: 4g
+    cpus: 2.0
+    networks: [internal]
+    # NO published ports, deliberately. The container is reachable by DNS name on
+    # `internal` only, which is where the gateway will find it. Publishing it
+    # would expose an isolated agent to the host for no gain — and a published
+    # port on a network shared with an untrusted agent is a hole in the design.
+    #
+    # If you ever need one for debugging, bind it to 127.0.0.1 and remove it after.
+    # ports: ["127.0.0.1:8081:8081"]
+    healthcheck:
+      # A real probe, not `--version`. The binary existing says nothing about the
+      # service serving; an MCP initialize round trip does.
+      test:
+        - CMD
+        - /usr/local/bin/cloakai-healthcheck
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
 
 networks:
   # No route to the internet. Container-to-container traffic and compose service

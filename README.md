@@ -61,6 +61,75 @@ Two concurrent runs of the same agent cannot see each other's files, because the
 filesystems. That is structural rather than a mitigation — see [#14](https://github.com/warpcode/cloakai/issues/14)
 and `scripts/isolation-tests.sh`.
 
+## How this fits together
+
+```
+                     ┌──────────────────────┐
+                     │      your host       │
+                     └──────────────────────┘
+        internal (no route off this machine)
+   ┌────────────────────────────────────────────────┐
+   │                                                │
+   │   dev-agent ──► litellm ──┐                    │
+   │      │              │      │                    │
+   │      │          postgres    │                   │
+   │      │            (keys)    │                   │
+   │                        ┌────┘                   │
+   │                        ▼                         │
+   │                 (upstream: a model provider)     │
+   └────────────────────────┼────────────────────────┘
+                            │ only litellm is here
+        egress (default bridge)
+                            ▼
+                        the internet
+```
+
+| Container | Networks | Capability |
+|---|---|---|
+| `dev-agent` | `internal` | Your project directory, and the proxy. Nothing else. |
+| `litellm` | `internal` + `egress` | The only route off this machine. Holds provider credentials. |
+| `postgres` | `internal` | The credential store. Cannot reach the internet, deliberately. |
+| `mock-upstream` | `egress` | Test profile only — stands in for a model provider. |
+
+**Who can leave the machine: only `litellm`.** That is the whole point. A container reaches the
+internet by being on `egress`, and only `litellm` is. To give the agent a new capability — web
+fetch, say — add a container on `internal` *and* `egress` that serves exactly that tool. Do not add a
+second network; adding a container to the existing two is the entire extension mechanism.
+
+### What is not automatic yet
+
+**Nothing calls these containers.** There is no gateway, no per-call container spawning, no
+scheduler, no queue. `dev-agent` runs because you asked for it, and you call it by hand. The next
+phase ([#15](https://github.com/warpcode/cloakai/issues/15) is done, [#17](https://github.com/warpcode/cloakai/issues/17)
+is the gateway) is what makes anything drive it.
+
+Treat this phase as plumbing, not automation. What it does buy you: the isolation flags live in one
+versioned file instead of someone's shell history, and the container survives `docker compose up`.
+
+### The dev stack
+
+```bash
+./scripts/dev.sh up       # bring everything up, WAIT for health, print state
+./scripts/dev.sh logs     # tail it
+./scripts/dev.sh shell    # exec into the agent container
+./scripts/dev.sh test     # isolation parity + the full isolation suite
+./scripts/dev.sh down     # tear down
+```
+
+`up` gates on health rather than firing and forgetting — a stack that takes 30 seconds to become
+usable and says nothing is how ordering bugs stay invisible.
+
+`dev-agent` publishes **no ports**. It is reachable as `dev-agent:8081` from `internal` and from
+nowhere else. If you need to poke at it, publish to `127.0.0.1` and remove it afterwards.
+
+### Two ways to run the agent, and they cannot drift
+
+`agents/isolation-flags` is the source of truth for `docker run`. Compose cannot read a file, so
+`infra/compose.yml` states the same flags in YAML. `scripts/check-isolation-parity.sh` fails if they
+disagree, and `scripts/dev.sh test` runs it. Without that guard, a change to one could leave the
+compose-managed container — the one a supervisor actually keeps alive — quietly less isolated than the
+one you tested.
+
 ### The isolation flags live in one file
 
 `agents/isolation-flags` is read by both `scripts/run.sh` and `scripts/isolation-tests.sh`, so the

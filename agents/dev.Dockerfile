@@ -50,7 +50,9 @@ COPY dist/${PLUGIN} /agent
 
 # One dispatcher for both modes, so there is no second image to maintain.
 COPY agents/cloakai-entrypoint.sh /usr/local/bin/cloakai-entrypoint
-RUN chmod +x /usr/local/bin/cloakai-entrypoint
+# A real health probe for compose: an MCP initialize round trip, not --version.
+COPY agents/cloakai-healthcheck.sh /usr/local/bin/cloakai-healthcheck
+RUN chmod +x /usr/local/bin/cloakai-entrypoint /usr/local/bin/cloakai-healthcheck
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/cloakai-entrypoint"]
