@@ -6,12 +6,17 @@
 # are adding a flag, add the comment saying which failure demanded it.
 set -euo pipefail
 
+# The caller's directory must be captured BEFORE we cd to the repo root.
+# Doing it afterwards made PROJECT_DIR resolve to the cloakai checkout itself, so
+# running this from any other project silently mounted cloakai's own source into
+# /workspace and ran the agent on the wrong tree.
+PROJECT_DIR="${CLOAKAI_PROJECT:-$PWD}"
+
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 IMAGE="${IMAGE:-cloakai/dev}"
 NETWORK="${CLOAKAI_NETWORK:-cloakai-internal}"
-PROJECT_DIR="${CLOAKAI_PROJECT:-$PWD}"
 
 # A missing network must fail loudly. Docker would otherwise attach the container
 # to the default bridge, which HAS internet — turning a deliberate isolation
@@ -66,8 +71,58 @@ else
   echo "note: stdin is not a terminal, running without a TTY." >&2
 fi
 
+# Model access goes through the proxy. Without this the agent has no reachable
+# endpoint at all, because the container cannot reach the internet to discover
+# one — so a bare `./scripts/run.sh "prompt"` failed on missing credentials.
+#
+# A caller-supplied OPENCODE_CONFIG_CONTENT always wins. Otherwise we mint a
+# scoped virtual key here, exactly as the isolation tests do, and point the
+# harness at the proxy. The agent never sees a provider credential.
+CONFIG_ARGS=()
+if [ -n "${OPENCODE_CONFIG_CONTENT:-}" ]; then
+  CONFIG_ARGS=(-e "OPENCODE_CONFIG_CONTENT=$OPENCODE_CONFIG_CONTENT")
+  if [ -n "${OPENCODE_API_KEY:-}" ]; then
+    CONFIG_ARGS+=(-e "OPENCODE_API_KEY=$OPENCODE_API_KEY")
+  fi
+else
+  VK=""
+  if docker ps --format '{{.Names}}' | grep -q litellm; then
+    VK=$(docker run --rm --network "$NETWORK" curlimages/curl:latest -s \
+           -X POST http://litellm:4000/key/generate \
+           -H 'Content-Type: application/json' \
+           -H "Authorization: Bearer ${LITELLM_MASTER_KEY:-sk-cloakai-dev-not-a-secret}" \
+           -d "{\"models\":[\"default\"],\"max_budget\":${CLOAKAI_BUDGET:-1.00},\"budget_duration\":\"24h\",\"key_alias\":\"run-$$-$(date +%s)\"}" \
+           2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])" 2>/dev/null || true)
+  fi
+
+  if [ -n "$VK" ]; then
+    CONFIG_ARGS=(-e "OPENCODE_API_KEY=$VK" -e "OPENCODE_DISABLE_MODELS_FETCH=1")
+    CONFIG_ARGS+=(-e "OPENCODE_CONFIG_CONTENT=$(CLOAKAI_VK="$VK" python3 -c '
+import json, os
+print(json.dumps({
+    "model": "cloakai/default",
+    "provider": {"cloakai": {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "cloakai proxy",
+        "options": {"baseURL": "http://litellm:4000/v1", "apiKey": os.environ["CLOAKAI_VK"]},
+        "models": {"default": {"name": "default"}},
+    }},
+    "permission": {"edit": "allow", "bash": "allow"},
+}))')")
+    echo "using a scoped virtual key from the proxy (max ${CLOAKAI_BUDGET:-1.00}/24h)" >&2
+  else
+    echo "warning: the proxy is not running, so no scoped key could be minted." >&2
+    echo "         The agent will have no model endpoint — the container cannot" >&2
+    echo "         reach the internet to find one. Start it with:" >&2
+    echo "           docker compose -f $ROOT/infra/compose.yml up -d" >&2
+    # An explicitly empty config is better than a half-formed one: it fails
+    # immediately and legibly rather than hanging on a discovery request.
+    CONFIG_ARGS=(-e "OPENCODE_CONFIG_CONTENT={}")
+  fi
+fi
+
 exec docker run --rm "${TTY[@]}" \
   -v "$PROJECT_DIR:/workspace" -w /workspace \
   "${FLAGS[@]}" \
-  -e OPENCODE_CONFIG_CONTENT="${OPENCODE_CONFIG_CONTENT:-{\}}" \
+  "${CONFIG_ARGS[@]}" \
   "$IMAGE" run "$@"

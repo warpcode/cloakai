@@ -138,7 +138,7 @@ def agent_doc(plugin_root: Path) -> dict:
 
 __all__ = [
     "agent_doc", "build_frontmatter", "emit_conformant", "emit_namespace",
-    "emit_via_strategy", "render_agent_body", "write_json",
+    "emit_runtime", "emit_via_strategy", "render_agent_body", "write_json",
 ]
 
 
@@ -201,9 +201,14 @@ agents:
 
 
 def yaml_scalar(value: str) -> str:
-    """Quote a scalar so a colon, hash or newline cannot break the document."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return '"' + escaped + '"'
+    """Quote a scalar so it cannot break the document.
+
+    YAML 1.2 double-quoted scalars use JSON-compatible escapes, so json.dumps
+    gives a correct result for any input, newlines and backslashes included.
+    The previous hand-rolled version escaped only backslashes and quotes while
+    its docstring promised to handle newlines.
+    """
+    return json.dumps(value, ensure_ascii=False)
 
 
 def render_instructions(plugin_root: Path, agent: dict) -> str:

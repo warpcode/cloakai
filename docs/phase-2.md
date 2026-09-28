@@ -129,7 +129,36 @@ Two further litellm gotchas, both silent:
   every run after, with a 400 reading `Key with alias ... already exists`. The alias now includes the
   PID and a timestamp.
 
-### 4. The credential story is now real, not asserted
+### 4. Five defects found in review
+
+All of them were invisible to the tests as written, which is the point of recording them.
+
+- **`run.sh` mounted the wrong directory.** `PROJECT_DIR="${CLOAKAI_PROJECT:-$PWD}"` ran *after*
+  `cd "$(dirname "$0")/.."`, so invoking the script from any other project mounted **cloakai's own
+  source** into `/workspace` and ran the agent on the wrong tree. The caller's directory is now
+  captured before the `cd`.
+- **`run.sh` could not actually reach a model.** It passed an empty `OPENCODE_CONFIG_CONTENT` and
+  nothing else, so a bare `./scripts/run.sh "prompt"` failed on missing credentials — the one way a
+  user is likely to invoke it. It now mints a scoped virtual key and points the harness at the proxy,
+  exactly as the isolation tests do, and says so on stderr.
+- **Test 5 could pass by not running.** If either container failed to start, both `docker exec`
+  calls returned empty, which is indistinguishable from isolation. It now asserts both containers
+  are up and self-readable *before* checking cross-visibility, and reports "could not run" as a
+  failure. Verified: pointing the flags at a nonexistent network turns it red.
+- **`PLUGIN` was a build arg that did nothing.** The Dockerfile hardcoded `COPY dist/dev`. It is now
+  `ARG PLUGIN=dev` + `COPY dist/${PLUGIN}`, so `PLUGIN=custom` builds that tree.
+- **litellm raced postgres.** No `depends_on`, so the proxy could hit an unready database on first
+  boot and produce the same misleading `No connected db.` as a genuinely missing one. Now
+  `condition: service_healthy`, and compose visibly waits.
+
+Plus two smaller ones: `yaml_scalar` claimed to escape newlines and did not (now `json.dumps`, which
+is correct for YAML 1.2 double-quoted scalars, since they use JSON escapes), and `agent.json` had
+drifted from the container entrypoint — it named `/agent.yaml`, which does not exist in the image,
+and a `run` command the script never ran. Both are now consistent, and a test asserts
+`agent.json` and `agents/cloakai-entrypoint.sh` agree, because nothing else would have caught it.
+That test immediately found the second drift.
+
+### 5. The credential story is now real, not asserted
 
 Test 8 does not just check that a model call works. It mints a **scoped virtual key** — one model,
 one dollar, 24 hours — and uses that. Test 8c asserts the master key does not appear in the agent's

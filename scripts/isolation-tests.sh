@@ -141,20 +141,40 @@ fi
 # --- 5. two concurrent invocations are isolated ------------------------------
 # Should hold trivially, because there is no shared volume. The test documents
 # and protects the property rather than discovering it.
+#
+# POSITIVE CONTROLS FIRST. Both containers must demonstrably be running and
+# readable by themselves. Without this, a container that failed to start made
+# both `docker exec` calls return empty, which looks exactly like isolation and
+# silently passes — the one thing this suite exists to avoid.
 a="probe-a-$$"; b="probe-b-$$"
-docker run --rm "${ISOLATION_FLAGS[@]}" --name "$a" "$IMAGE" shell -c "echo A > /tmp/$a.marker; sleep 4" >/dev/null 2>&1 &
+docker rm -f "$a" "$b" >/dev/null 2>&1
+docker run -d --rm --name "$a" "${ISOLATION_FLAGS[@]}" "$IMAGE" \
+  shell -c "echo A > /tmp/$a.marker; sleep 20" >/dev/null 2>&1 &
 pa=$!
-docker run --rm "${ISOLATION_FLAGS[@]}" --name "$b" "$IMAGE" shell -c "echo B > /tmp/$b.marker; sleep 4" >/dev/null 2>&1 &
+docker run -d --rm --name "$b" "${ISOLATION_FLAGS[@]}" "$IMAGE" \
+  shell -c "echo B > /tmp/$b.marker; sleep 20" >/dev/null 2>&1 &
 pb=$!
-sleep 1
-saw_a=$(docker exec "$b" sh -c "cat /tmp/$a.marker 2>/dev/null" 2>/dev/null || echo "")
-saw_b=$(docker exec "$a" sh -c "cat /tmp/$b.marker 2>/dev/null" 2>/dev/null || echo "")
-wait $pa $pb 2>/dev/null
-if [ -z "$saw_a" ] && [ -z "$saw_b" ]; then
-  ok "5. two concurrent invocations cannot see each other's files"
+sleep 4
+
+self_a=$(docker exec "$a" cat "/tmp/$a.marker" 2>/dev/null || true)
+self_b=$(docker exec "$b" cat "/tmp/$b.marker" 2>/dev/null || true)
+
+if [ "$self_a" != "A" ] || [ "$self_b" != "B" ]; then
+  # Not a breach — the test could not run. Reporting it as a pass is exactly the
+  # false positive being fixed, so it is a failure.
+  no "5. COULD NOT RUN — a='$self_a' b='$self_b' (both containers must be up and self-readable before isolation is meaningful)"
 else
-  no "5. ONE RUN SAW THE OTHER'S FILES — there is shared writable state"
+  saw_a=$(docker exec "$b" cat "/tmp/$a.marker" 2>/dev/null || true)
+  saw_b=$(docker exec "$a" cat "/tmp/$b.marker" 2>/dev/null || true)
+  if [ -z "$saw_a" ] && [ -z "$saw_b" ]; then
+    ok "5. two concurrent invocations cannot see each other's files (both self-reads verified)"
+  else
+    no "5. ONE RUN SAW THE OTHER'S FILES — there is shared writable state"
+  fi
 fi
+
+docker rm -f "$a" "$b" >/dev/null 2>&1
+wait $pa $pb 2>/dev/null
 
 # --- 6. root filesystem is read-only -----------------------------------------
 if in_agent 'touch /should-not-exist 2>/dev/null; test ! -e /should-not-exist'; then

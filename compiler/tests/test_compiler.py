@@ -157,6 +157,26 @@ class TestBuild(Sandbox):
         fm = V.parse_frontmatter(self.cwd / "dist/dev/google.antigravity/agents/dev.md")
         self.assertNotIn("elsewhere", str(fm))
 
+    def test_entrypoint_script_matches_agent_json(self):
+        """agent.json and the container entrypoint must not drift.
+
+        The entrypoint script hardcodes the mcp invocation, and agent.json also
+        records it. Nothing enforced that they agree, so agent.json could claim
+        /agent.yaml (a path that does not exist in the image) while the image
+        worked fine — the drift only surfaces when a gateway reads agent.json.
+        """
+        agent = json.loads(
+            (self.plugin / "io.github.warpcode.cloakai" / "agent.json").read_text())
+        script = (REPO / "agents" / "cloakai-entrypoint.sh").read_text(encoding="utf-8")
+
+        # The script wraps the command across lines with backslash continuations,
+        # so drop those and compare on whitespace-normalised text.
+        flat = " ".join(script.replace("\\", " ").split())
+        for mode, cmd in agent["entrypoints"].items():
+            self.assertIn(" ".join(cmd.split()), flat,
+                          f"entrypoint {mode!r} in agent.json does not appear in "
+                          f"agents/cloakai-entrypoint.sh; one of them is stale")
+
     def test_agy_mcp_uses_serverurl_only(self):
         self.compile()
         text = (self.cwd / "dist/dev/google.antigravity/mcp_config.json").read_text()

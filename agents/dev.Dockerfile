@@ -42,8 +42,11 @@ ENV XDG_DATA_HOME=/root/.local/share \
     XDG_CACHE_HOME=/root/.cache \
     OPENCODE_DISABLE_AUTOUPDATE=1
 
-# The compiled plugin. This is what clients consume.
-COPY dist/dev /agent
+# The compiled plugin. This is what clients consume. PLUGIN is a build arg so
+# `PLUGIN=custom ./scripts/build.sh` builds that plugin's tree rather than
+# silently shipping dev's.
+ARG PLUGIN=dev
+COPY dist/${PLUGIN} /agent
 
 # One dispatcher for both modes, so there is no second image to maintain.
 COPY agents/cloakai-entrypoint.sh /usr/local/bin/cloakai-entrypoint
