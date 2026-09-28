@@ -1,0 +1,14 @@
+{
+  "model": "cloakai/mock-model",
+  "provider": {
+    "cloakai": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "cloakai internal proxy",
+      "options": { "baseURL": "http://openai-proxy:4000/v1", "apiKey": "sk-dummy" },
+      "models": {
+        "mock-model": { "name": "mock-model" }
+      }
+    }
+  },
+  "permission": { "edit": "allow", "bash": "allow" }
+}

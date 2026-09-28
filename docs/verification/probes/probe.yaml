@@ -1,0 +1,11 @@
+version: "16"
+models:
+  probe-model:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: http://openai-proxy:4000/v1
+agents:
+  probe:
+    description: A minimal probe agent used to verify the docker agent MCP server.
+    instruction: Reply with exactly PONG when asked to ping.
+    model: probe-model

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json.schemastore.org/agent-plugins.json",
+  "name": "cloakai-probe",
+  "version": "0.0.1",
+  "description": "Phase 0 Check 2 probe: non-loopback http MCP entry.",
+  "namespace": "io.github.warpcode.probe",
+  "mcp": "./mcp.json"
+}

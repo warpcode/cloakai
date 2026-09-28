@@ -1,0 +1,8 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git ripgrep && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://opencode.ai/install | bash && mv /root/.opencode/bin/opencode /usr/local/bin/opencode && rm -rf /root/.opencode
+ENV XDG_DATA_HOME=/root/.local/share
+ENV XDG_CONFIG_HOME=/root/.config
+ENV XDG_CACHE_HOME=/root/.cache
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/opencode"]

@@ -1,0 +1,12 @@
+services:
+  probe:
+    image: curlimages/curl:latest
+    networks: [internal]
+    entrypoint: ["sleep", "3600"]
+  openai-proxy:
+    build: { context: ., dockerfile: mock.Dockerfile }
+    networks: [internal, egress]
+networks:
+  internal:
+    internal: true
+  egress: {}
