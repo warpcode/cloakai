@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Antigravity Plugin Manifest",
+  "description": "Schema for Antigravity plugin manifest files (plugin.json). NOTE: the canonical identifier below is published in the Antigravity documentation as a `$schema` value and an editor-autocomplete aid, but the URL itself does NOT resolve — https://antigravity.google/schemas/v1/plugin.json returns HTTP 404. This file is transcribed verbatim from the \"Full JSON Schema\" block at https://antigravity.google/docs/plugins/ (fetched 2026-09-28) because there is nothing to fetch it from.",
+  "$id": "https://antigravity.google/schemas/v1/plugin.json",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The unique, machine-readable name of the plugin. Must contain only alphanumeric characters, hyphens, and underscores.",
+      "pattern": "^[a-zA-Z0-9-_]+$"
+    },
+    "description": {
+      "type": "string",
+      "description": "A brief human-readable description of the plugin's purpose and capabilities."
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

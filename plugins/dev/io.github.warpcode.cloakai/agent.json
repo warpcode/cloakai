@@ -1,0 +1,29 @@
+{
+  "$comment": "The ONLY file that must change when the runtime changes. If this starts growing capability logic, that logic belongs in the gateway, not here.",
+  "description": "Development agent. Reviews changes for correctness, security and maintainability, and writes release notes from a diff. Use for code review, pull request feedback, and preparing a release summary.",
+  "instructions": [
+    "skills/"
+  ],
+  "runtime": "opencode",
+  "image": "cloakai/dev:latest",
+  "entrypoints": {
+    "run": "opencode run --agent dev",
+    "mcp": "docker-agent serve mcp /agent.yaml --http --listen 0.0.0.0:8081 --insecure-no-auth"
+  },
+  "limits": {
+    "cpus": "2",
+    "memory": "4g",
+    "pids": 1024
+  },
+  "isolation": {
+    "network": "internal",
+    "read_only": true,
+    "cap_drop": [
+      "ALL"
+    ],
+    "no_new_privileges": true
+  },
+  "mcp_servers": [
+    "agents"
+  ]
+}

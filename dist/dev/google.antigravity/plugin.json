@@ -1,0 +1,5 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "dev",
+  "description": "Development agent: code review and release notes, compiled from one source for every client."
+}
