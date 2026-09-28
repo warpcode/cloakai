@@ -1,0 +1,27 @@
+# LiteLLM proxy config.
+#
+# The agent container holds a virtual key scoped to this, not a provider key.
+# A prompt injection cannot spend a real credential because it never has one.
+#
+# Replace the model list with whatever you actually use. `default` is a passthrough
+# to whatever OpenAI-compatible upstream these env vars point at.
+#
+# With the compose `test` profile up, that upstream is infra/mock-upstream.py, so
+# isolation test 8 can run a real opencode -> litellm -> HTTP round trip without a
+# provider key. Point OPENAI_API_BASE at a real provider and nothing else changes.
+
+model_list:
+  - model_name: default
+    litellm_params:
+      model: openai/default
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: os.environ/OPENAI_API_BASE
+
+litellm_settings:
+  # A per-key spend cap. A scoped key with no cap bounds nothing.
+  max_budget: 5.00
+  budget_duration: 24h
+
+general_settings:
+  # The agent must not be able to enumerate other keys or read the config back.
+  disable_spend_logs: false

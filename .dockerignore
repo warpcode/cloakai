@@ -1,0 +1,15 @@
+# Keep the build context small and free of host-specific state. The image needs
+# dist/ (the generated plugin) and agents/ (the Dockerfile and entrypoint) only.
+.git/
+.github/
+docs/
+infra/
+clients/
+plugins/
+compiler/
+scripts/
+agents/README.md
+**/__pycache__/
+**/*.pyc
+.venv/
+README.md

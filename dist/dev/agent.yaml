@@ -1,0 +1,22 @@
+# GENERATED from plugins/dev/io.github.warpcode.cloakai/agent.json by scripts/compile.sh.
+# Do not edit: edit agent.json and recompile.
+#
+# Config version 16 and `agents` as a MAPPING keyed by agent name are both required.
+# A list fails with "sequence was used where mapping is expected". A model must
+# resolve, either here or via a provider credential, or the config is rejected.
+#
+# instruction_file is RELATIVE to this file. An absolute path is rejected outright
+# with "must be a local relative path inside the config directory", which is easy
+# to hit because the file lives at /agent/agent.yaml inside the image.
+# See docs/verification/phase-0.md Check 1.
+version: "16"
+models:
+  proxy-model:
+    provider: openai
+    model: default
+    base_url: http://litellm:4000/v1
+agents:
+  dev:
+    description: "Development agent. Reviews changes for correctness, security and maintainability, and writes release notes from a diff. Use for code review, pull request feedback, and preparing a release summary."
+    instruction_file: instructions.md
+    model: proxy-model

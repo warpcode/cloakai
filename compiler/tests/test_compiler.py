@@ -130,6 +130,33 @@ class TestBuild(Sandbox):
             self.assertFalse((self.cwd / p).read_text().startswith("---"),
                              f"{p} should carry no frontmatter")
 
+    def test_agy_model_frontmatter_is_a_tier_not_an_object(self):
+        """Regression: `model` in agent.json is not the same concept as agy's `model`.
+
+        agent.json's model endpoint is `upstream`. agy's agent frontmatter `model` is a
+        tier enum (inherit/flash/pro). When both were called `model`, the endpoint dict
+        was rendered into the tier field.
+        """
+        self.compile()
+        fm = V.parse_frontmatter(self.cwd / "dist/dev/google.antigravity/agents/dev.md")
+        if "model" in fm:
+            self.assertIn(fm["model"], {"inherit", "flash", "pro"},
+                          f"agy model must be a tier enum, got {fm['model']!r}")
+
+    def test_upstream_endpoint_reaches_agent_yaml(self):
+        agent_path = self.plugin / "io.github.warpcode.cloakai" / "agent.json"
+        doc = json.loads(agent_path.read_text())
+        doc["upstream"] = {"provider": "openai", "id": "some-model",
+                           "base_url": "http://elsewhere:9999/v1"}
+        agent_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        self.compile()
+        text = (self.cwd / "dist/dev/agent.yaml").read_text()
+        self.assertIn("http://elsewhere:9999/v1", text)
+        self.assertIn("some-model", text)
+        # and it must NOT have leaked into the agy agent frontmatter
+        fm = V.parse_frontmatter(self.cwd / "dist/dev/google.antigravity/agents/dev.md")
+        self.assertNotIn("elsewhere", str(fm))
+
     def test_agy_mcp_uses_serverurl_only(self):
         self.compile()
         text = (self.cwd / "dist/dev/google.antigravity/mcp_config.json").read_text()

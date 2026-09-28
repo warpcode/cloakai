@@ -136,6 +136,26 @@ fi
 sk "MCP tools/list: EXPECTED TO FAIL — gateway not built yet (Phase 2/3)"
 sk "VS Code skill listing: needs a GUI session; verify manually"
 
+# ---------------------------------------------------------------- isolation
+# Container isolation is reported separately from compiler correctness: it needs
+# a built image and a running network, and a missing prerequisite is a skip rather
+# than a failure. scripts/isolation-tests.sh does the checking and exits non-zero
+# on a real breach.
+head_ "container isolation"
+if [ "${SKIP_ISOLATION:-0}" = "1" ]; then
+  sk "skipped via SKIP_ISOLATION=1"
+elif ! docker network inspect "${CLOAKAI_NETWORK:-cloakai-internal}" >/dev/null 2>&1; then
+  sk "network '${CLOAKAI_NETWORK:-cloakai-internal}' does not exist — run: docker compose -f infra/compose.yml up -d"
+elif ! docker image inspect "${IMAGE:-cloakai/dev}" >/dev/null 2>&1; then
+  sk "image '${IMAGE:-cloakai/dev}' not built — run ./scripts/build.sh"
+else
+  if ./scripts/isolation-tests.sh; then
+    ok "all isolation tests passed"
+  else
+    no "ISOLATION BREACH — see the failing assertion above"
+  fi
+fi
+
 # ---------------------------------------------------------------- summary
 head_ "summary"
 printf '  %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"

@@ -1,0 +1,111 @@
+# cloakai network topology.
+#
+# The principle: MEMBERSHIP OF THE internal NETWORK IS THE CAPABILITY GRANT.
+#
+#   Add a container to `internal`    -> grant a capability
+#   Remove it                        -> revoke it
+#
+# The plugin's mcp.json is the POLICY layer. This file is the ENFORCEMENT layer.
+# They compose: a plugin cannot grant a tool that is not on the network, and the
+# agent cannot reach anything it did not declare.
+#
+# Why the agent cannot curl, git clone or npm install: it is not a bug, it is the
+# design. Web access becomes something you DEPLOY AS A TOOL rather than something
+# the container has ambiently. It is also fully reversible — adding a capability
+# container on both networks grants a specific tool the ability to reach out, with
+# no architectural change. See issue #19.
+#
+# Verified in docs/verification/phase-0.md Check 4: a container on `internal` only
+# cannot reach the internet (a real timeout, not a 403), and a container on
+# `internal` + `egress` can. Both halves matter — the first proves the boundary,
+# the second proves the boundary is the only thing stopping it.
+
+services:
+  # The only route off this machine. The agent holds a scoped virtual key and never
+  # a provider credential, so a prompt injection cannot spend a real one.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    volumes:
+      - ./litellm.yaml:/app/config.yaml:ro
+      # LiteLLM authenticates every request against a key database. Without one it
+      # fails auth with a misleading "No connected db.", which surfaces to the
+      # agent as an AI_APICallError rather than as a proxy problem.
+      #
+      # SQLite is not accepted: virtual keys and spend tracking require Postgres.
+      # That is not incidental — a scoped key with a spend cap is only meaningful
+      # if something durable records what it has spent.
+      - litellm-data:/data
+    environment:
+      # A spend cap is the second half of the credential story. The key alone
+      # bounds nothing on its own.
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-cloakai-dev-not-a-secret}
+      DATABASE_URL: postgresql://cloakai:${POSTGRES_PASSWORD:-cloakai-dev-not-a-secret}@postgres:5432/litellm
+      # Without this the image never reads the mounted config: the proxy starts,
+      # authenticates keys, and then reports no models at all. It fails as
+      # "Invalid model name" on the request rather than as a config error.
+      CONFIG_FILE_PATH: /app/config.yaml
+      # Which upstream `default` forwards to. The compose `test` profile points
+      # this at infra/mock-upstream.py so test 8 needs no provider key.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-upstream-not-a-secret}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-http://mock-upstream:4001/v1}
+    networks: [internal, egress]
+    restart: unless-stopped
+
+  # The credential store. internal ONLY: the agent can reach it, and it cannot
+  # reach the internet. Putting the key database on egress would hand the internet
+  # a path to every virtual key cloakai has issued.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: cloakai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cloakai-dev-not-a-secret}
+      POSTGRES_DB: litellm
+    volumes:
+      - litellm-db:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloakai -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  # A real model call needs a real upstream. With no provider key configured, this
+  # stands in for one so isolation test 8 can prove the whole path works rather
+  # than skipping the only test that shows the container can still do its job.
+  # The `test` profile means it never starts with the normal topology, and it sits
+  # BEHIND litellm, so the proxy, network, credentials and isolation are all real.
+  # Test-only: swap the model list in litellm.yaml for a real provider instead.
+  mock-upstream:
+    image: python:3.12-slim
+    command: ["python", "/srv/upstream.py"]
+    volumes:
+      - ./mock-upstream.py:/srv/upstream.py:ro
+    networks: [egress]
+    profiles: ["test"]
+
+  # On both networks, deliberately. This is a capability container: it can reach
+  # the internet while the agent cannot. It exists to prove that, not to serve
+  # traffic. Nothing in `run` mode talks to it.
+  capability-probe:
+    image: curlimages/curl:latest
+    entrypoint: ["sleep", "3600"]
+    networks: [internal, egress]
+    profiles: ["test"]
+
+networks:
+  # No route to the internet. Container-to-container traffic and compose service
+  # name DNS still work, which is the whole point: the agent can reach litellm.
+  internal:
+    internal: true
+    name: ${CLOAKAI_NETWORK:-cloakai-internal}
+
+  # Default bridge. A container needs this to leave the machine.
+  egress: {}
+
+volumes:
+  # LiteLLM's key/spend database. Named, so it survives restarts and is not
+  # written into the image.
+  litellm-data:
+  # The credential store backing it.
+  litellm-db:

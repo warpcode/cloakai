@@ -6,6 +6,11 @@
   ],
   "runtime": "opencode",
   "image": "cloakai/dev:latest",
+  "upstream": {
+    "provider": "openai",
+    "id": "default",
+    "base_url": "http://litellm:4000/v1"
+  },
   "entrypoints": {
     "run": "opencode run --agent dev",
     "mcp": "docker-agent serve mcp /agent.yaml --http --listen 0.0.0.0:8081 --insecure-no-auth"

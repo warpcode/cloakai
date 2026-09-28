@@ -140,3 +140,96 @@ __all__ = [
     "agent_doc", "build_frontmatter", "emit_conformant", "emit_namespace",
     "emit_via_strategy", "render_agent_body", "write_json",
 ]
+
+
+# ---------------------------------------------------------------- our own runtime
+
+def emit_runtime(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
+    """Emit the artifacts only cloakai's own container consumes.
+
+    Not one of the four rules, because no client reads these. `agent.yaml` is the
+    docker-agent config for the container's mcp mode; `instructions.md` is the
+    system prompt it points at. Both derive from agent.json so that changing the
+    runtime still means editing exactly one file.
+    """
+    written: list[Path] = []
+    base = out_root / plugin_root.name
+    base.mkdir(parents=True, exist_ok=True)
+
+    instructions = base / "instructions.md"
+    instructions.write_text(render_instructions(plugin_root, agent), encoding="utf-8", newline="\n")
+    written.append(instructions)
+
+    name = agent.get("name") or plugin_root.name
+    # The endpoint comes from agent.json so the proxy address is not hardcoded here.
+    # It is `upstream`, NOT `model`: agy's agent frontmatter has its own `model` field
+    # meaning a tier (inherit/flash/pro), and reusing the key rendered this dict into
+    # an enum. A unit test caught it, which is the argument for having one.
+    upstream = agent.get("upstream") or {}
+    proxy = upstream.get("base_url") or "http://litellm:4000/v1"
+    model_id = upstream.get("id") or "default"
+
+    agent_yaml = f"""\
+# GENERATED from plugins/{plugin_root.name}/{NAMESPACE}/agent.json by scripts/compile.sh.
+# Do not edit: edit agent.json and recompile.
+#
+# Config version 16 and `agents` as a MAPPING keyed by agent name are both required.
+# A list fails with "sequence was used where mapping is expected". A model must
+# resolve, either here or via a provider credential, or the config is rejected.
+#
+# instruction_file is RELATIVE to this file. An absolute path is rejected outright
+# with "must be a local relative path inside the config directory", which is easy
+# to hit because the file lives at /agent/agent.yaml inside the image.
+# See docs/verification/phase-0.md Check 1.
+version: "16"
+models:
+  proxy-model:
+    provider: openai
+    model: {model_id}
+    base_url: {proxy}
+agents:
+  {name}:
+    description: {yaml_scalar(agent.get("description", ""))}
+    instruction_file: instructions.md
+    model: proxy-model
+"""
+    path = base / "agent.yaml"
+    path.write_text(agent_yaml, encoding="utf-8", newline="\n")
+    written.append(path)
+
+    return written
+
+
+def yaml_scalar(value: str) -> str:
+    """Quote a scalar so a colon, hash or newline cannot break the document."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + escaped + '"'
+
+
+def render_instructions(plugin_root: Path, agent: dict) -> str:
+    """Compose the system prompt from the same skills every client gets.
+
+    The bodies are read from plugins/, not from dist/, because a SKILL.md is
+    identical in every target by design and re-reading the source keeps this a
+    pure function of the source tree.
+    """
+    parts = [f"# {agent.get('name', 'agent')}", "", agent.get("description", "").strip(), ""]
+
+    skills_dir = plugin_root / "skills"
+    if skills_dir.is_dir():
+        parts.append("## Skills")
+        parts.append("")
+        for entry in sorted(skills_dir.iterdir(), key=lambda p: p.name):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            skill_md = entry / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            parts.append(f"### {entry.name}")
+            parts.append("")
+            parts.append(f"Source: skills/{entry.name}/SKILL.md")
+            parts.append("")
+            parts.append(skill_md.read_text(encoding="utf-8").strip())
+            parts.append("")
+
+    return "\n".join(parts).rstrip() + "\n"
