@@ -10,9 +10,15 @@ Fields per target:
   kind          "conformant" | "namespace" | "tree" | "config"
   url_field     The remote-endpoint key this client uses for an MCP URL
   mcp_container The file name the MCP config is written under, if any
+  strategy      names an entry in strategies.STRATEGIES. Rule 2 (kind=namespace)
+                needs none: it is uniform. Rules 3 and 4 do, because a manifest
+                cannot be described as data — agy reduces ours to three keys,
+                Claude Code puts it at a different path. Adding a client of an
+                EXISTING output shape is a row here and nothing else. A NEW shape
+                needs a new strategy in strategies.py, and that is real new code.
   frontmatter   source agent.json key -> this client's frontmatter key, or None
-                to emit no frontmatter at all. Only keys listed here are emitted,
-                so we never write a field the client does not define.
+                for no frontmatter. Only keys listed here are emitted, so we never
+                write a field the client does not define.
 """
 
 # Canonical schema identifiers.
@@ -32,6 +38,7 @@ TARGETS = [
         "rule": 2,
         "out": "com.github.copilot",
         "kind": "namespace",
+        "strategy": None,
         "url_field": "url",
         "mcp_container": None,
         "frontmatter": None,
@@ -41,6 +48,7 @@ TARGETS = [
         "rule": 2,
         "out": "dev.openhands",
         "kind": "namespace",
+        "strategy": None,
         "url_field": "url",
         "mcp_container": None,
         "frontmatter": None,
@@ -52,6 +60,7 @@ TARGETS = [
         "kind": "tree",
         "url_field": "serverUrl",
         "mcp_container": "mcp_config.json",
+        "strategy": "tree:antigravity",
         # agy registers an agent by its frontmatter `name`. Emitting the body with no
         # frontmatter validates clean and then silently loads nothing — the exact
         # failure mode Task 4 exists to prevent, reached the other way.
@@ -73,6 +82,7 @@ TARGETS = [
         "kind": "tree",
         "url_field": "url",
         "mcp_container": ".mcp.json",
+        "strategy": "tree:claude-code",
         "frontmatter": None,
     },
     {
@@ -82,6 +92,7 @@ TARGETS = [
         "kind": "config",
         "url_field": "url",
         "mcp_container": None,
+        "strategy": "config:opencode",
         "frontmatter": None,
     },
     {
@@ -91,6 +102,7 @@ TARGETS = [
         "kind": "config",
         "url_field": "serverUrl",
         "mcp_container": "mcp_config.json",
+        "strategy": "config:gemini-cli",
         "frontmatter": None,
     },
 ]

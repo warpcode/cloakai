@@ -247,9 +247,13 @@ def check_skills(skills_dir: Path, where: str) -> list[str]:
 def parse_frontmatter(path: Path) -> dict:
     """Minimal YAML frontmatter reader.
 
-    Deliberately not a full YAML parser: we only accept flat scalar keys, which is
-    all the frontmatters in this project use. Anything nested is a silent-skip risk
-    we would rather surface than half-parse.
+    Deliberately not a full YAML parser. It supports the subset frontmatters
+    actually use — flat scalar keys plus block scalars — and refuses anything
+    else rather than half-parsing it, because a mis-parsed `name` is a skill that
+    silently never loads.
+
+    Block scalars matter: `description: >` and `description: |` are ordinary YAML
+    and common in skill frontmatter. Rejecting them would reject valid skills.
     """
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---"):
@@ -260,24 +264,76 @@ def parse_frontmatter(path: Path) -> dict:
         _fail(str(path), "frontmatter is not closed with ---")
 
     out: dict[str, Any] = {}
-    for lineno, raw in enumerate(text[3:end].splitlines(), start=2):
+    lines = text[3:end].splitlines()
+
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        lineno = i + 2
         line = raw.strip()
+
         if not line or line.startswith("#"):
+            i += 1
             continue
-        if line.startswith((" ", "\t")):
-            _fail(str(path), f"line {lineno}: nested frontmatter is not supported here; "
-                             f"only flat scalar keys are accepted")
+
+        if raw[:1] in (" ", "\t"):
+            # An indented line with no preceding block scalar is genuinely nested
+            # YAML, which this reader does not support.
+            _fail(str(path), f"line {lineno}: nested frontmatter is not supported; "
+                             f"only flat scalar keys and block scalars (>, |) are accepted")
+
         if ":" not in line:
             _fail(str(path), f"line {lineno}: expected 'key: value', got {raw!r}")
+
         key, _, value = line.partition(":")
         key = key.strip()
         value = value.strip()
+
+        # Block scalar: collect the indented continuation lines.
+        if value in (">", ">-", ">+", "|", "|-", "|+"):
+            block, i = _read_block(lines, i + 1, str(path))
+            out[key] = block
+            continue
+
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
         if value == "[]":
             value = []
         out[key] = value
+        i += 1
+
     return out
+
+
+def _read_block(lines: list[str], start: int, where: str) -> tuple[str, int]:
+    """Read an indented block scalar body, returning (text, next_index).
+
+    Folded (>) joins lines with spaces and unwraps paragraphs; literal (|) keeps
+    the line breaks. Chomping indicators (-/+) control the trailing newline, which
+    we normalise away because nothing downstream cares and determinism does.
+    """
+    body: list[str] = []
+    i = start
+    while i < len(lines):
+        raw = lines[i]
+        if raw.strip() and raw[:1] not in (" ", "\t"):
+            break
+        body.append(raw)
+        i += 1
+
+    if not any(b.strip() for b in body):
+        _fail(where, "block scalar has no content")
+
+    # Drop the common indentation, then the leading/trailing blank lines.
+    indents = [len(b) - len(b.lstrip()) for b in body if b.strip()]
+    margin = min(indents)
+    trimmed = [b[margin:] if b.strip() else "" for b in body]
+    while trimmed and not trimmed[0].strip():
+        trimmed.pop(0)
+    while trimmed and not trimmed[-1].strip():
+        trimmed.pop()
+
+    return "\n".join(trimmed), i
 
 
 def check_no_escape(plugin_root: Path, candidate: Path, where: str) -> None:

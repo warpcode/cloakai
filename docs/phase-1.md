@@ -24,17 +24,22 @@ direction.
 |---|---|---|
 | Source plugin | `plugins/dev/` | Two skills, an MCP server, one `agent.json` |
 | Compiler | `compiler/cloakai_compiler/` | Python, stdlib only, ~700 lines |
-| Per-client table | `compiler/cloakai_compiler/clients.py` | Adding a client is a row |
+| Per-client table | `compiler/cloakai_compiler/clients.py` | Output metadata; names a strategy |
+| Output strategies | `compiler/cloakai_compiler/strategies.py` | One per output *shape* |
 | Validation | `compiler/cloakai_compiler/validate.py` | 30+ checks, all fail loudly |
-| Tests | `compiler/tests/` | 42 tests |
+| Strategies | `compiler/cloakai_compiler/strategies.py` | Output shapes, dispatched from the table |
+| Tests | `compiler/tests/` | 52 tests |
 | Schemas | `schemas/` | Five, vendored, never fetched at load time |
 | Scripts | `scripts/{compile,install,test}.sh` | |
 
-`./scripts/test.sh` → **13 passed, 0 failed, 2 expected skips.**
+`./scripts/test.sh` → **13 passed, 0 failed, 2 expected skips.** 52 unit tests.
 
 ---
 
-## The two bugs
+## The bugs
+
+Four, all found by running the thing rather than by reading it — two by me, two in review. Each is
+the kind of failure that stays invisible until something actually exercises it.
 
 ### 1. agy validated a plugin that loaded nothing
 
@@ -59,6 +64,19 @@ behaviour. Treat a validator as a shape check, never a load test.
 
 Fixed by mapping `agent.json` onto agy's documented fields through the clients table, and
 covered by three tests: frontmatter present, unset optionals omitted, set optionals mapped.
+
+### 1a. Running the compiler from another directory deleted `dist/`
+
+Found in review. `clean_output()` removed `REPO_ROOT/dist` while the emitters wrote to
+`Path("dist")` relative to the process cwd. Running the test suite — or invoking the CLI
+from anywhere else — deleted the committed `dist/` and `clients/` trees in the working
+checkout. Reproduced deliberately: compiling from `/tmp` removed `dist/dev/plugin.json`
+from the repo.
+
+The output root is now an explicit `--out` / `--clients-out` parameter threaded through
+every emitter, and `clean_output()` deletes only the two paths it is given, with a comment
+saying why it must never fall back to a repo-relative default. Covered by four tests, one
+of which plants a canary in the real `dist/` and asserts it survives.
 
 ### 2. The linter's own version check was wrong
 
@@ -90,12 +108,24 @@ Five, all vendored under `schemas/`:
 its description says so. The two frontmatter schemas have no published JSON Schema at all, so
 they are transcribed and annotated with the Phase 0 finding that agy does not enforce them.
 
+### 3. Block scalars in frontmatter were rejected
+
+Also found in review. The frontmatter reader rejected any indented line as "nested YAML",
+which meant `description: >` and `description: |` — ordinary, common YAML — were refused.
+A valid skill would have failed to build with a misleading error.
+
+Folded (`>`) and literal (`|`) block scalars are now parsed, including chomping
+indicators, with the common indentation stripped. Genuinely nested mappings are still
+refused, because a mis-parsed `name` is a skill that silently never loads. Five tests.
+
 ---
 
 ## Acceptance criteria
 
 - [x] `plugins/dev/` authored and validates against the vendored schemas
 - [x] `compiler/` implements all four rules, no per-client special-casing in the source
+      (a client of an existing output shape is a row in `clients.py`; a genuinely new
+      shape is a new strategy, which is real new code and is documented as such)
 - [x] `scripts/compile.sh` regenerates `dist/` and `clients/` deterministically
 - [x] Running the compiler twice produces an empty diff
 - [x] All Task 4 lint failures exit non-zero naming the offending file

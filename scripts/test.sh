@@ -68,17 +68,26 @@ PY
 
 check_keys "$DIST/google.antigravity/plugin.json" '$schema' name description
 
-# opencode: mcp key, type remote, never "sse"
+# opencode: key is mcp, every entry is type remote, and "sse" appears nowhere.
+# Inspects all servers rather than one hardcoded name, so renaming a server or
+# adding a second one cannot make this assertion silently vacuous.
 if [ -f clients/opencode.json ]; then
-  if python3 -c "
-import json,sys
-d=json.load(open('clients/opencode.json'))
-e=d.get('mcp',{}).get('agents',{})
+  out=$(python3 -c "
+import json
+d = json.load(open('clients/opencode.json'))
+servers = d.get('mcp')
+assert servers is not None, 'no mcp key'
 assert 'mcpServers' not in d, 'uses mcpServers instead of mcp'
-assert e.get('type')=='remote', f'type is {e.get(\"type\")}'
+assert servers, 'mcp key is empty; this assertion would be vacuous'
+for name, e in servers.items():
+    assert e.get('type') == 'remote', f'{name}: type is {e.get(\"type\")!r}, expected remote'
+    assert e.get('url'), f'{name}: no url'
+    assert e.get('enabled') is True, f'{name}: not enabled'
 assert 'sse' not in json.dumps(d), 'emits an sse type'
-" 2>/dev/null; then ok "clients/opencode.json uses mcp + type remote, no sse"
-  else no "clients/opencode.json shape is wrong"; fi
+print(f'{len(servers)} server(s): ' + ', '.join(sorted(servers)))
+" 2>&1)
+  if [ $? -eq 0 ]; then ok "clients/opencode.json uses mcp + type remote, no sse ($out)"
+  else no "clients/opencode.json shape is wrong: $out"; fi
 fi
 
 # claude-plugin manifest

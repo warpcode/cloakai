@@ -24,10 +24,11 @@ from cloakai_compiler import validate as V  # noqa: E402
 from cloakai_compiler.clients import ANTIGRAVITY_SCHEMA, MCP_SCHEMA, PLUGIN_SCHEMA  # noqa: E402
 
 
-def run_compiler(plugin: Path, cwd: Path) -> subprocess.CompletedProcess:
+def run_compiler(plugin: Path, cwd: Path, out: str = "dist", clients: str = "clients") -> subprocess.CompletedProcess:
     """Invoke the real entry point, so exit codes are the ones a user would see."""
     return subprocess.run(
-        [sys.executable, "-m", "cloakai_compiler", str(plugin), "--quiet"],
+        [sys.executable, "-m", "cloakai_compiler", str(plugin),
+         "--out", out, "--clients-out", clients, "--quiet"],
         cwd=cwd, env={"PYTHONPATH": str(REPO / "compiler"), "PATH": "/usr/bin:/bin"},
         capture_output=True, text=True,
     )
@@ -165,6 +166,71 @@ class TestBuild(Sandbox):
         second.update({p.relative_to(self.cwd): p.read_bytes()
                        for p in sorted((self.cwd / "clients").rglob("*")) if p.is_file()})
         self.assertEqual(first, second, "second compile produced a different result")
+
+
+# ------------------------------------------------------- output destination
+
+class TestOutputDestination(Sandbox):
+    """Regression: output root must be a parameter, never inferred from cwd.
+
+    An earlier version cleaned REPO_ROOT/dist while writing to cwd/dist, so
+    running the compiler from any other directory deleted the committed dist/
+    tree. The test below asserts the two can never diverge again.
+    """
+
+    def test_does_not_touch_the_repo_checkout(self):
+        canary_dist = REPO / "dist" / ".canary"
+        canary_clients = REPO / "clients" / ".canary"
+        canary_dist.parent.mkdir(parents=True, exist_ok=True)
+        canary_clients.parent.mkdir(parents=True, exist_ok=True)
+        canary_dist.write_text("do not delete me", encoding="utf-8")
+        canary_clients.write_text("do not delete me", encoding="utf-8")
+        self.addCleanup(lambda: (canary_dist.unlink(missing_ok=True),
+                                 canary_clients.unlink(missing_ok=True)))
+
+        # Run from a completely different cwd, as a user or CI might.
+        r = run_compiler(self.plugin, self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        self.assertTrue(canary_dist.is_file(),
+                        "compiler deleted the repo's dist/ while running from another cwd")
+        self.assertTrue(canary_clients.is_file(),
+                        "compiler deleted the repo's clients/ while running from another cwd")
+
+    def test_output_lands_in_the_requested_directory(self):
+        r = run_compiler(self.plugin, self.tmp, out="build-out", clients="build-config")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.tmp / "build-out" / "dev" / "plugin.json").is_file())
+        self.assertTrue((self.tmp / "build-config" / "opencode.json").is_file())
+        self.assertFalse((self.tmp / "dist").exists(), "--out was not honoured")
+
+    def test_absolute_out_is_honoured(self):
+        elsewhere = self.tmp / "elsewhere"
+        r = run_compiler(self.plugin, self.cwd, out=str(elsewhere / "d"),
+                         clients=str(elsewhere / "c"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((elsewhere / "d" / "dev" / "plugin.json").is_file())
+        self.assertTrue((elsewhere / "c" / "opencode.json").is_file())
+
+    def test_default_cleans_but_keep_does_not(self):
+        marker = self.tmp / "dist" / "STALE"
+
+        # Default: a stale file is removed, so a rebuild cannot inherit it.
+        (self.tmp / "dist").mkdir(parents=True, exist_ok=True)
+        marker.write_text("stale", encoding="utf-8")
+        r = run_compiler(self.plugin, self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(marker.exists(), "default run should clean stale output")
+
+        # --keep: a pre-existing sibling file survives.
+        marker.write_text("stale", encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, "-m", "cloakai_compiler", str(self.plugin),
+             "--out", "dist", "--clients-out", "clients", "--keep", "--quiet"],
+            cwd=self.tmp, env={"PYTHONPATH": str(REPO / "compiler"), "PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(marker.exists(), "--keep should not have cleaned")
 
 
 # ------------------------------------------------------------------ the thesis
@@ -350,6 +416,62 @@ class TestLint(Sandbox):
     def test_stray_file_under_skills(self):
         (self.plugin / "skills" / "notes.md").write_text("loose", encoding="utf-8")
         self.assertFailsNaming("must be directories")
+
+    def test_block_scalar_description_accepted(self):
+        """`description: >` is ordinary YAML and must not be rejected."""
+        p = self.plugin / "skills" / "code-review" / "SKILL.md"
+        text = p.read_text(encoding="utf-8")
+        p.write_text(text.replace(
+            "description: Review a change for correctness, security, and maintainability, then report findings ranked by severity with file:line references.",
+            "description: >\n"
+            "  Review a change for correctness, security, and maintainability,\n"
+            "  then report findings ranked by severity with file:line references.",
+        ), encoding="utf-8")
+        r = self.compile()
+        self.assertEqual(r.returncode, 0, f"block scalar rejected:\n{r.stderr}")
+
+    def test_block_scalar_literal_pipe_accepted(self):
+        p = self.plugin / "skills" / "code-review" / "SKILL.md"
+        text = p.read_text(encoding="utf-8")
+        p.write_text(text.replace(
+            "description: Review a change for correctness, security, and maintainability, then report findings ranked by severity with file:line references.",
+            "description: |\n"
+            "  Line one of the description.\n"
+            "  Line two of the description.",
+        ), encoding="utf-8")
+        r = self.compile()
+        self.assertEqual(r.returncode, 0, f"literal block rejected:\n{r.stderr}")
+
+    def test_block_scalar_preserves_content(self):
+        p = self.plugin / "skills" / "code-review" / "SKILL.md"
+        p.write_text(
+            "---\nname: code-review\ndescription: |\n  First line.\n  Second line.\n---\n\n# Body\n",
+            encoding="utf-8")
+        r = self.compile()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        fm = V.parse_frontmatter(p)
+        self.assertEqual(fm["description"], "First line.\nSecond line.")
+
+    def test_folded_block_scalar_joins_lines(self):
+        p = self.plugin / "skills" / "code-review" / "SKILL.md"
+        p.write_text(
+            "---\nname: code-review\ndescription: >\n  One two three.\n  Four five.\n---\n\n# Body\n",
+            encoding="utf-8")
+        fm = V.parse_frontmatter(p)
+        self.assertEqual(fm["description"], "One two three.\nFour five.")
+
+    def test_empty_block_scalar_rejected(self):
+        p = self.plugin / "skills" / "code-review" / "SKILL.md"
+        p.write_text("---\nname: code-review\ndescription: >\n---\n\n# Body\n", encoding="utf-8")
+        self.assertFailsNaming("block scalar has no content")
+
+    def test_genuinely_nested_yaml_still_rejected(self):
+        """Block scalars are supported; arbitrary nesting is not silently accepted."""
+        p = self.plugin / "skills" / "code-review" / "SKILL.md"
+        p.write_text(
+            "---\nname: code-review\ndescription: ok\nmeta:\n  nested: true\n---\n\n# Body\n",
+            encoding="utf-8")
+        self.assertFailsNaming("nested frontmatter is not supported")
 
     def test_skill_symlink_escape(self):
         outside = self.tmp / "outside.md"
