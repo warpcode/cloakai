@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cloakai-probe": {
+      "type": "http",
+      "url": "http://172.19.0.3:8081/mcp"
+    }
+  }
+}
