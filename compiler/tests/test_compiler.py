@@ -130,6 +130,53 @@ class TestBuild(Sandbox):
             self.assertFalse((self.cwd / p).read_text().startswith("---"),
                              f"{p} should carry no frontmatter")
 
+    def test_agy_model_frontmatter_is_a_tier_not_an_object(self):
+        """Regression: `model` in agent.json is not the same concept as agy's `model`.
+
+        agent.json's model endpoint is `upstream`. agy's agent frontmatter `model` is a
+        tier enum (inherit/flash/pro). When both were called `model`, the endpoint dict
+        was rendered into the tier field.
+        """
+        self.compile()
+        fm = V.parse_frontmatter(self.cwd / "dist/dev/google.antigravity/agents/dev.md")
+        if "model" in fm:
+            self.assertIn(fm["model"], {"inherit", "flash", "pro"},
+                          f"agy model must be a tier enum, got {fm['model']!r}")
+
+    def test_upstream_endpoint_reaches_agent_yaml(self):
+        agent_path = self.plugin / "io.github.warpcode.cloakai" / "agent.json"
+        doc = json.loads(agent_path.read_text())
+        doc["upstream"] = {"provider": "openai", "id": "some-model",
+                           "base_url": "http://elsewhere:9999/v1"}
+        agent_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        self.compile()
+        text = (self.cwd / "dist/dev/agent.yaml").read_text()
+        self.assertIn("http://elsewhere:9999/v1", text)
+        self.assertIn("some-model", text)
+        # and it must NOT have leaked into the agy agent frontmatter
+        fm = V.parse_frontmatter(self.cwd / "dist/dev/google.antigravity/agents/dev.md")
+        self.assertNotIn("elsewhere", str(fm))
+
+    def test_entrypoint_script_matches_agent_json(self):
+        """agent.json and the container entrypoint must not drift.
+
+        The entrypoint script hardcodes the mcp invocation, and agent.json also
+        records it. Nothing enforced that they agree, so agent.json could claim
+        /agent.yaml (a path that does not exist in the image) while the image
+        worked fine — the drift only surfaces when a gateway reads agent.json.
+        """
+        agent = json.loads(
+            (self.plugin / "io.github.warpcode.cloakai" / "agent.json").read_text())
+        script = (REPO / "agents" / "cloakai-entrypoint.sh").read_text(encoding="utf-8")
+
+        # The script wraps the command across lines with backslash continuations,
+        # so drop those and compare on whitespace-normalised text.
+        flat = " ".join(script.replace("\\", " ").split())
+        for mode, cmd in agent["entrypoints"].items():
+            self.assertIn(" ".join(cmd.split()), flat,
+                          f"entrypoint {mode!r} in agent.json does not appear in "
+                          f"agents/cloakai-entrypoint.sh; one of them is stale")
+
     def test_agy_mcp_uses_serverurl_only(self):
         self.compile()
         text = (self.cwd / "dist/dev/google.antigravity/mcp_config.json").read_text()

@@ -1,0 +1,49 @@
+# cloakai/dev
+#
+# Cloakai agent image.
+#
+# Run:    docker run ... $(cat agents/isolation-flags) cloakai/dev run "prompt"
+# Shell:  docker run ... $(cat agents/isolation-flags) cloakai/dev shell
+# MCP:    docker run ... $(cat agents/isolation-flags) cloakai/dev mcp
+#
+# This is a WORD LIST for shell word-splitting. The mount is deliberately NOT
+# here: it depends on the caller's project directory, so it is passed separately.
+#
+# Every flag below is required, and each was derived by escalating one at a time
+# and reading the next failure — see docs/verification/phase-0.md Check 3. None is
+# cargo-cult. If you add a flag, add the reason.
+#
+#   --network      comes from the caller (cloakai-internal). There is no fallback:
+#                  an accidental default-bridge attachment is an open container.
+#
+#   --read-only    the root filesystem is the isolation boundary.
+#
+#   The four --tmpfs mounts are each REQUIRED, discovered one at a time by
+#   reading the next EROFS. Under --read-only the agent writes to /root/.local,
+#   then /root/.config, then /root/.cache. A whole writable $HOME is not needed,
+#   and three isolated subdirectories keep nothing persistent between runs.
+#
+#   --cap-drop=ALL / no-new-privileges   no privilege escalation from inside.
+#
+#   --pids-limit / --memory / --cpus     resource ceilings. Phase 0 confirmed 64
+#                  pids and 512m also complete a real model call, so these are
+#                  conservative rather than tight.
+#
+#   NOT HERE, deliberately:
+#     --privileged            never. Root-equivalent on the host.
+#     -v /var/run/docker.sock never. Lets the agent start sibling containers,
+#                             which defeats the entire isolation model.
+#     any second bind mount  the project directory is the one intentional
+#                             exception, scoped by choice and discipline, not by
+#                             anything the spec enforces.
+--network NETWORK_PLACEHOLDER
+--read-only
+--tmpfs /tmp
+--tmpfs /root/.local
+--tmpfs /root/.config
+--tmpfs /root/.cache
+--cap-drop=ALL
+--security-opt no-new-privileges
+--pids-limit=1024
+--memory=4g
+--cpus=2

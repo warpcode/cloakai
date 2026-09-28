@@ -20,13 +20,53 @@ one file changes every target.
 ## Quick start
 
 ```bash
-./scripts/compile.sh      # plugins/ -> dist/ and clients/
-./scripts/install.sh      # install the generated trees
-./scripts/test.sh         # unit tests, determinism, conformance
+# one-time
+./scripts/build.sh                              # compile + build the agent image
+docker compose -f infra/compose.yml up -d       # the proxy and its credential store
+
+# daily
+./scripts/run.sh "review the diff on this branch"  # an isolated agent on your project
+./scripts/test.sh                                 # compiler + isolation tests
+./scripts/install.sh                             # install the generated trees into clients
 ```
 
-No Docker, no container, no gateway. A plugin is a directory; you can install it and use the
-agent on your workstation immediately.
+`./scripts/compile.sh` and `./scripts/install.sh` need no Docker at all. A plugin is a
+directory, so you can install it and use the agent on your workstation with nothing else running.
+
+## Running an agent in a container
+
+`./scripts/run.sh` gives the agent your project directory and nothing else. Two things are worth
+knowing before you use it.
+
+**The container cannot reach the internet.** Not a policy — a topology. It sits on a Docker network
+created with `internal: true`, which has no route off the machine. So `curl`, `git clone` and
+`npm install` do not work inside it. That is the design: the model call goes through a proxy on the
+network, and everything else the agent might want becomes something you deploy as a *tool* rather
+than something it has ambiently. It is fully reversible — give a capability container a second
+network and it can reach out, with no architectural change (see [#19](https://github.com/warpcode/cloakai/issues/19)).
+
+**The container holds a scoped virtual key, never a provider credential.** The proxy issues
+per-key budgets, so a prompt injection cannot spend a real one. `scripts/isolation-tests.sh` test 8
+mints its own single-model, one-dollar key to prove it.
+
+### What is and is not isolated
+
+| | |
+|---|---|
+| **Isolated** | The host filesystem, except the project directory you mounted. The internet. Any provider credential. Sibling containers. |
+| **Available** | Your project directory, and the proxy on `internal`. |
+| **Not shared** | Nothing persists between runs. There is no writable volume, so there is nothing for two invocations to collide over. |
+
+Two concurrent runs of the same agent cannot see each other's files, because they are different
+filesystems. That is structural rather than a mitigation — see [#14](https://github.com/warpcode/cloakai/issues/14)
+and `scripts/isolation-tests.sh`.
+
+### The isolation flags live in one file
+
+`agents/isolation-flags` is read by both `scripts/run.sh` and `scripts/isolation-tests.sh`, so the
+container you run and the container that is tested cannot drift apart. Every flag in it is justified
+in a comment next to it. If you add one, add the reason — the set was derived by escalating one
+flag at a time, not guessed.
 
 ## Layout
 
@@ -39,16 +79,28 @@ plugins/dev/                              SOURCE — edit this
     └── agent.json                        the only file that changes when the runtime does
 
 compiler/cloakai_compiler/
-├── clients.py                            THE per-client table — adding a client is a row
+├── clients.py                            the per-client table
+├── strategies.py                         one per output shape, dispatched from the table
 ├── compile.py                            the four rules
 ├── validate.py                           every lint check; all fail loudly
-└── tests/                                42 tests
+└── tests/                                52 tests
+
+agents/                                   the container
+├── dev.Dockerfile                        two modes off one image
+├── cloakai-entrypoint.sh                 run | mcp | shell
+└── isolation-flags                       shared by run.sh AND the isolation tests
+
+infra/
+├── compose.yml                           internal + egress networks, proxy, credential store
+├── litellm.yaml                          virtual keys with per-key budgets
+└── mock-upstream.py                      test profile only, so test 8 needs no provider key
 
 schemas/                                  vendored JSON Schemas, never fetched at load time
 dist/                                     GENERATED, committed (see #16 for moving it to CI)
 clients/                                  GENERATED config files
 docs/verification/phase-0.md              what was verified, and what disproved an assumption
 docs/phase-1.md                           Phase 1 results
+docs/phase-2.md                           Phase 2 results
 ```
 
 ## The four rules
@@ -78,9 +130,14 @@ non-zero on all of it. A plugin that refuses to build is better than one that ha
 
 ## Status
 
-Phase 0 (verification) and Phase 1 (plugin + compiler) are done. Containers, the gateway, and
-live MCP tooling are Phase 2 and 3, so `tools/list` does not resolve yet — `scripts/test.sh`
-reports that as an expected skip rather than a failure.
+Phases 0–2 are done: verification, the plugin compiler, and an isolated container runtime with a
+proxy in front of it. Phase 3 (Compose integration and a stable gateway address) is next, so the
+MCP endpoint in the generated plugins points at a hostname the gateway does not serve yet —
+`tools/list` against the generated config will not resolve until then.
+
+`./scripts/test.sh` runs both layers: compiler correctness and determinism (fast, no Docker), and
+container isolation (needs the image and the network). Each reports its own result so a missing
+prerequisite is a skip, never a silent pass.
 
 Issues: [#11 epic](https://github.com/warpcode/cloakai/issues/11) ·
 [#12 Phase 0](https://github.com/warpcode/cloakai/issues/12) ·
