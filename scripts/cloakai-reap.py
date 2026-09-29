@@ -163,7 +163,11 @@ def main() -> int:
         return 0
 
     reaped = sweep(args.max_lifetime, dry_run=args.dry_run)
-    if not args.dry_run:
+    # Report whenever there is something to report. This was gated on
+    # `if not args.dry_run`, which made --dry-run print NOTHING — the one mode whose
+    # entire purpose is to tell an operator what it would do. `report()` already
+    # says "would reap" for that case; the gate just stopped it being called.
+    if reaped:
         report(reaped, args.dry_run)
     return 0
 

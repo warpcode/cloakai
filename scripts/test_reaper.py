@@ -133,6 +133,41 @@ def main() -> int:
         bad("--dry-run KILLED something")
     cleanup()
 
+    section("a dry run must SAY something when there is something to reap")
+    # The --dry-run path reported nothing at all, which defeats its only purpose:
+    # telling an operator what would happen. Asserted through the real entry point,
+    # not sweep(), because the gate that dropped the output was in main().
+    import io
+    import contextlib
+    from unittest import mock
+
+    planted = make(age=MAX_LIFETIME + 3, instance="dryrun-probe")
+    argv = ["cloakai-reap.py", "--once", "--dry-run",
+            "--max-lifetime", str(MAX_LIFETIME)]
+    err = io.StringIO()
+    try:
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err):
+            reaper.main()
+    finally:
+        cleanup()
+    out = err.getvalue()
+    if "would reap" in out and planted[:12] in out:
+        ok("--dry-run names the container it would reap")
+    else:
+        bad(f"--dry-run said nothing useful; got: {out.strip()[:120]!r}")
+
+    # And with nothing to reap it must stay quiet rather than printing noise.
+    err2 = io.StringIO()
+    try:
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err2):
+            reaper.main()
+    finally:
+        cleanup()
+    if err2.getvalue().strip() == "":
+        ok("--dry-run stays quiet when there is nothing to reap")
+    else:
+        bad(f"--dry-run was noisy with nothing to reap: {err2.getvalue().strip()[:80]!r}")
+
     section("sweeping an empty system is a no-op, not an error")
     reaped = reaper.sweep(MAX_LIFETIME)
     if reaped == []:
