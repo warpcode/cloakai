@@ -50,11 +50,15 @@ def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> li
     # Pre-compute resolved plugin root once to avoid redundant realpath syscalls during checks
     resolved_plugin_root = plugin_root.resolve(strict=False)
 
+    for file_name in ("plugin.json", "mcp.json"):
+        path = plugin_root / file_name
+        V.check_no_escape(plugin_root, path, str(path), resolved_root=resolved_plugin_root)
+
     skills_dir = plugin_root / "skills"
     skills = V.check_skills(skills_dir, str(skills_dir))
     for name in skills:
-        for child in (skills_dir / name).iterdir():
-            V.check_no_escape(plugin_root, child, str(child), resolved_root=resolved_plugin_root)
+        for descendant in (skills_dir / name).rglob("*"):
+            V.check_no_escape(plugin_root, descendant, str(descendant), resolved_root=resolved_plugin_root)
 
     agent = agent_doc(plugin_root)
     agent_path = plugin_root / NAMESPACE / "agent.json"
