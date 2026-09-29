@@ -549,6 +549,13 @@ class TestLint(Sandbox):
         link.symlink_to("/nonexistent/path/outside/plugin")
         self.assertFailsNaming("outside the plugin root")
 
+    def test_symlink_loop_fails_validation(self):
+        link1 = self.plugin / "skills" / "code-review" / "loop1.md"
+        link2 = self.plugin / "skills" / "code-review" / "loop2.md"
+        link1.symlink_to(link2)
+        link2.symlink_to(link1)
+        self.assertFailsNaming("cannot resolve path safely")
+
     def test_skill_dir_is_symlink(self):
         real = self.plugin / "skills" / "code-review"
         outside = self.tmp / "outside-skill"
