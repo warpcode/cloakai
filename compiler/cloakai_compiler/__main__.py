@@ -41,6 +41,10 @@ def clean_output(dist_root: Path, clients_root: Path) -> None:
 
 def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> list[Path]:
     # ---- validate source before emitting anything (fail loudly, early) ----
+    for file_name in ("plugin.json", "mcp.json"):
+        path = plugin_root / file_name
+        V.check_no_escape(plugin_root, path, str(path))
+
     plugin_json = V.load_json(plugin_root / "plugin.json")
     V.check_plugin_manifest(plugin_json, str(plugin_root / "plugin.json"))
 
@@ -50,8 +54,8 @@ def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> li
     skills_dir = plugin_root / "skills"
     skills = V.check_skills(skills_dir, str(skills_dir))
     for name in skills:
-        for child in (skills_dir / name).iterdir():
-            V.check_no_escape(plugin_root, child, str(child))
+        for descendant in (skills_dir / name).rglob("*"):
+            V.check_no_escape(plugin_root, descendant, str(descendant))
 
     agent = agent_doc(plugin_root)
     agent_path = plugin_root / NAMESPACE / "agent.json"

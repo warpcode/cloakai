@@ -527,6 +527,28 @@ class TestLint(Sandbox):
         link.symlink_to(outside)
         self.assertFailsNaming("outside the plugin root")
 
+    def test_dangling_symlink_escape(self):
+        link = self.plugin / "skills" / "code-review" / "dangling.md"
+        link.symlink_to("/nonexistent/path/outside/plugin")
+        self.assertFailsNaming("outside the plugin root")
+
+    def test_plugin_json_symlink_escape(self):
+        (self.plugin / "plugin.json").unlink()
+        (self.plugin / "plugin.json").symlink_to("/nonexistent/path/outside/plugin.json")
+        self.assertFailsNaming("outside the plugin root")
+
+    def test_mcp_json_symlink_escape(self):
+        (self.plugin / "mcp.json").unlink()
+        (self.plugin / "mcp.json").symlink_to("/nonexistent/path/outside/mcp.json")
+        self.assertFailsNaming("outside the plugin root")
+
+    def test_nested_skill_symlink_escape(self):
+        subdir = self.plugin / "skills" / "code-review" / "subdir"
+        subdir.mkdir()
+        link = subdir / "nested_escape.md"
+        link.symlink_to("/nonexistent/path/outside/plugin")
+        self.assertFailsNaming("outside the plugin root")
+
     def test_skill_dir_is_symlink(self):
         real = self.plugin / "skills" / "code-review"
         outside = self.tmp / "outside-skill"
