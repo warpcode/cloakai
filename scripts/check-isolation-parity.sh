@@ -112,10 +112,15 @@ def check(ok_, msg):
     if not ok_:
         fails.append(msg)
 
-check(svc["read_only"] is True, "read_only matches --read-only")
-check(svc["cap_drop"] == ["ALL"], f"cap_drop matches --cap-drop=ALL (compose: {svc['cap_drop']})")
-check(any("no-new-privileges" in s for s in svc["security_opt"]),
-      "security_opt matches --security-opt no-new-privileges")
+check(svc["read_only"] is True and has("--read-only"), "read_only matches --read-only")
+# Compared against the PARSED flag, not a literal. Two of these were hardcoded,
+# which meant that changing the flag file and the compose file together would
+# make this compare compose against a stale literal and fail for the wrong
+# reason — or, worse, agree for the wrong reason.
+check(svc["cap_drop"] == [opt("--cap-drop")],
+      f"cap_drop matches --cap-drop={opt('--cap-drop')} (compose: {svc['cap_drop']})")
+check(any(opt("--security-opt") in s for s in svc["security_opt"]),
+      f"security_opt matches --security-opt {opt('--security-opt')} (compose: {svc['security_opt']})")
 
 check(str(svc["pids_limit"]) == opt("--pids-limit"),
       f"pids_limit matches --pids-limit={opt('--pids-limit')} (compose: {svc['pids_limit']})")

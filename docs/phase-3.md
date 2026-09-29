@@ -122,6 +122,13 @@ mask crashes on a per-call container, and per-call containers are created with `
 **`down` does not use `--remove-orphans`.** It would remove containers belonging to other compose
 projects that share the `cloakai-internal` network.
 
+**The project directory is pinned via `--project-directory`, and every config mount is an absolute
+path.** These are not independent. `--project-directory` also changes how *every* relative mount
+resolves, so a relative `./litellm.yaml` started pointing at the repo root, docker created an empty
+**directory** at that path, and litellm came up with an empty model list serving 400s. A missing mount
+source does not fail a compose invocation — it silently becomes a directory, which is worse than a
+hard error. `dev.sh` exports absolute config paths and refuses to start if either is not a real file.
+
 ---
 
 ## Acceptance criteria

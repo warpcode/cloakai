@@ -10,7 +10,28 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 COMPOSE_FILE="${COMPOSE_FILE:-infra/compose.yml}"
-COMPOSE=(docker compose -f "$COMPOSE_FILE")
+# --project-directory makes compose resolve the AGENT_PROJECT mount against the repo
+# root rather than against infra/, where the compose file happens to live. Without
+# it the `..` default works by accident and `AGENT_PROJECT=.` silently mounts infra/.
+#
+# It also changes resolution for EVERY other relative path, so the config mounts are
+# passed as ABSOLUTE paths below. That is not belt and braces: a relative
+# `./litellm.yaml` resolved to the repo root, docker created an empty directory at
+# that path, and litellm came up with no model list and served 400s.
+export CLOAKAI_LITELLM_CONFIG="${CLOAKAI_LITELLM_CONFIG:-$ROOT/infra/litellm.yaml}"
+export CLOAKAI_MOCK_UPSTREAM="${CLOAKAI_MOCK_UPSTREAM:-$ROOT/infra/mock-upstream.py}"
+COMPOSE=(docker compose --project-directory "$ROOT" -f "$COMPOSE_FILE")
+
+# A missing config path does NOT fail the compose invocation. Docker creates an empty
+# DIRECTORY at the mount source and starts the container anyway, which is how
+# litellm came up serving 400s with an empty model list. Check it here instead.
+for f in "$CLOAKAI_LITELLM_CONFIG" "$CLOAKAI_MOCK_UPSTREAM"; do
+  if [ ! -f "$f" ]; then
+    echo "error: $f does not exist, so it would be mounted as an empty directory." >&2
+    echo "       set CLOAKAI_LITELLM_CONFIG / CLOAKAI_MOCK_UPSTREAM to real files." >&2
+    exit 1
+  fi
+done
 PROFILE="${COMPOSE_PROFILE:-test}"
 WAIT_SECONDS="${DEV_UP_TIMEOUT:-180}"
 
@@ -64,7 +85,9 @@ cmd_up() {
     exit 1
   }
   echo
-  status
+  # `status` returns non-zero when anything is unhealthy, and `set -e` is active,
+  # so calling it bare would abort here and swallow the instructions below.
+  status || true
   echo
   echo "${green}ready.${off} the agent is reachable on the internal network${off} as 'dev-agent'."
   echo "${dim}Nothing calls it automatically yet — there is no gateway. This is plumbing.${off}"
@@ -85,7 +108,11 @@ cmd_logs() {
 
 cmd_shell() {
   need_image
-  "${COMPOSE[@]}" exec dev-agent shell "$@"
+  # `docker compose exec` and `docker exec` bypass the container ENTRYPOINT — they
+  # exec a binary directly. So `exec dev-agent shell` looks for a binary literally
+  # named "shell" and fails, even though `shell` is a valid MODE of the entrypoint.
+  # The entrypoint has to be named explicitly.
+  "${COMPOSE[@]}" exec dev-agent /usr/local/bin/cloakai-entrypoint shell "$@"
 }
 
 cmd_test() {

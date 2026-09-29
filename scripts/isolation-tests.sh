@@ -78,7 +78,10 @@ head_ "isolation"
 # running is a different object, created by compose from YAML rather than from
 # the word list. If compose silently dropped a flag, every other test would still
 # pass. So check the real service when it is running.
-AGENT_SERVICE="${AGENT_SERVICE:-}"
+# Defaulted rather than left empty: invoking this script directly used to skip
+# Test 0 entirely, because an empty service name can never match. The "not
+# running" branch below still skips cleanly when the stack is down.
+AGENT_SERVICE="${AGENT_SERVICE:-dev-agent}"
 AGENT_CID=$(docker compose -f "${COMPOSE_FILE:-infra/compose.yml}" ps -q "$AGENT_SERVICE" 2>/dev/null | head -1 || true)
 if [ -z "$AGENT_CID" ]; then
   sk "0. compose service '$AGENT_SERVICE' is not running — start it with ./scripts/dev.sh up"
@@ -338,14 +341,22 @@ networks:
     internal: true
     name: cloakai-oomtest
 YAML
-docker network create --internal cloakai-oomtest >/dev/null 2>&1
-# --project-name pins the container name. Compose otherwise derives it from the
+# Let compose own BOTH the container and the network. Creating the network by hand
+# first made compose warn that it had not created it, and meant an interrupted run
+# left the network and a temp file behind.
+#
+# --project-name pins the container name: compose otherwise derives it from the
 # directory, and this file lives in a mktemp dir, so the name was unpredictable.
+# The trap covers SIGINT, so an aborted test run still cleans up.
+cleanup_oom() {
+  docker compose -p cloakai-oomtest -f "$OOM_FILE" down --remove-orphans >/dev/null 2>&1 || true
+  rm -f "$OOM_FILE"
+}
+trap cleanup_oom EXIT INT TERM
+
 timeout 180 docker compose -p cloakai-oomtest -f "$OOM_FILE" up --abort-on-container-exit >/dev/null 2>&1
 oom_state=$(docker inspect cloakai-oomtest-oom-victim-1 --format '{{.State.OOMKilled}}/{{.State.ExitCode}}' 2>/dev/null || echo "missing")
-docker rm -f cloakai-oomtest-oom-victim-1 >/dev/null 2>&1
-docker network rm cloakai-oomtest >/dev/null 2>&1
-rm -f "$OOM_FILE"
+cleanup_oom
 
 case "$oom_state" in
   true/137) ok "9. mem_limit is enforced — the container was OOM-killed at the limit, not the host" ;;

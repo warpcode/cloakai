@@ -96,6 +96,12 @@ internet by being on `egress`, and only `litellm` is. To give the agent a new ca
 fetch, say — add a container on `internal` *and* `egress` that serves exactly that tool. Do not add a
 second network; adding a container to the existing two is the entire extension mechanism.
 
+The gateway — one endpoint that spawns a fresh container per call — is **not built yet**, and the
+seven design questions it depends on have been [measured rather than
+assumed](docs/gateway-verification.md). Two of the answers changed the design: a container survives
+its gateway dying (so the reaper cannot live inside the gateway), and a hop limit is unimplementable
+while agents call peers directly on a flat network.
+
 ### What is not automatic yet
 
 **Nothing calls these containers.** There is no gateway, no per-call container spawning, no
