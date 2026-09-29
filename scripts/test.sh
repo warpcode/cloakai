@@ -46,6 +46,21 @@ else
   no "compile failed"
 fi
 
+# ---------------------------------------------------------------- reaper
+# The leak guard for per-call containers. Only meaningful once a gateway exists,
+# but the reaper is standalone and testable now, and a leak guard that is written
+# and verified later is a leak guard that does not exist.
+head_ "per-call container reaper"
+if [ "${SKIP_ISOLATION:-0}" = "1" ] || ! command -v docker >/dev/null 2>&1; then
+  sk "docker not available"
+elif ! docker network inspect "${CLOAKAI_NETWORK:-cloakai-internal}" >/dev/null 2>&1; then
+  sk "no internal network"
+elif python3 scripts/test_reaper.py; then
+  ok "the reaper spares live calls and reaps hung ones"
+else
+  no "THE REAPER IS WRONG — it would kill live calls, or leak hung ones"
+fi
+
 # ---------------------------------------------------------------- conformance
 head_ "generated output conforms to each client's expectations"
 

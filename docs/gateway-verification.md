@@ -13,7 +13,7 @@ and **one of them turns out to be architecturally contradictory as written.**
 | # | Question | Answer | Confidence |
 |---|---|---|---|
 | 1 | Proxy or pipe? | **Proxy.** It is the only path already verified to work. | High — evidence exists |
-| 2 | Timeouts and cancellation | **A container survives its gateway dying.** A reaper is mandatory and must live outside the gateway. | High — reproduced |
+| 2 | Timeouts and cancellation | **A container survives its gateway dying.** A reaper is mandatory and must live outside the gateway. **Built and tested.** | High — reproduced + tested |
 | 3 | Concurrency limits | **Memory binds before CPU**, at roughly 3 concurrent with the real flags. Cap and queue. | High — measured |
 | 4 | Cold-start cost | **Warm pool saves 119 ms/call (38%), payback after ~4 calls.** The claim is right. | High — measured |
 | 5 | Hop limit | **Unimplementable as designed.** Direct peer calls mean the gateway never sees the chain. | High — reproduced |
@@ -65,24 +65,42 @@ it finishes on its own — and an agent that hangs may never finish.
 exists to handle, so the thing that does the reaping must be something whose death is not the failure
 mode. Options are a separate supervised process, or a sidecar.
 
-The reaper mechanism itself is simple and verified:
+The reaper is built and tested: `scripts/cloakai-reap.py`, with `scripts/test_reaper.py` proving the
+behaviours that matter. Label every per-call container with `cloakai.call=1`,
+`cloakai.started=<epoch>` and `cloakai.instance=<id>`, then `docker rm -f` anything carrying the label
+whose **age** exceeds the maximum call lifetime. That lifetime *is* the timeout — there is no
+separate mechanism, which is a simplification worth having.
+
+**The age check is load-bearing, and it is the only thing that makes a cross-instance sweep safe.**
+"Kill everything with our label on startup" is wrong: during a rolling restart a new instance would
+kill a live peer's in-flight calls. Measured both ways:
 
 ```console
-orphans: 3
-sweep at t=0 (too young, must skip): 0 swept, 3 remain
-sweep at t>3s (must reap):            3 swept, 0 remain
-RESULT: age-based sweep reaps orphans, and does not kill the young
+B startup sweep:  0 killed  (peer's call is young)
+A's LIVE call survived    (correct)
+... past max lifetime ...
+B periodic sweep: 1 killed  (peer's call is now hung)
+A's hung call was reaped (correct)
 ```
 
-Label every container with `cloakai.started=<epoch>`, and periodically
-`docker rm -f` anything with that label older than the maximum call lifetime. The `max call lifetime`
-**is** the timeout — there is no separate mechanism, which is a simplification worth having.
+An instance id is recorded, but only so a log line can say whose call leaked. **Safety does not
+depend on it** — age is the whole rule. Verified by removing the age check: the tests fail with "THE
+REAPER KILLED A LIVE CALL — it is too eager".
+
+**Run both modes.** `--once` at startup catches the overwhelmingly common case of a supervised
+restart, and is nearly free because a gateway that just started cannot have many orphans. `--interval`
+is what actually bounds the leak, because startup cleanup does nothing while the gateway is *down*,
+and nothing at all if it is killed and never restarted. Two of the reaper's tests cover what makes it
+safe rather than merely present: an unlabelled container is never considered, and one whose age cannot
+be determined is spared rather than killed on a guess.
 
 **Two consequences for the design:**
 
 1. The timeout value bounds the *worst-case leak*, not just a slow call. A 10-minute timeout with 4 GB
    per container means 10 minutes × concurrency × 4 GB of worst-case exposure. This makes Q3's cap a
-   memory-safety question, not a throughput one.
+   memory-safety question, not a throughput one. The reaper's default is 900 s — generous enough
+   that a legitimate long call is never reaped out from under the model, which is the failure mode
+   that would make a reaper worse than none.
 2. Client disconnect is **not** sufficient on its own. TCP close is observable, but a client that
    vanishes without closing must still be caught by the age sweep.
 
