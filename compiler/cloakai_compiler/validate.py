@@ -340,13 +340,13 @@ def check_no_escape(plugin_root: Path, candidate: Path, where: str, resolved_roo
     """Reject any path that resolves outside the plugin root, following symlinks.
 
     Performance optimization: accepts optional `resolved_root` to avoid
-    repeating `plugin_root.resolve(strict=True)` filesystem syscalls in loops.
+    repeating `plugin_root.resolve(strict=False)` filesystem syscalls in loops.
     """
     try:
-        resolved = candidate.resolve(strict=True)
+        resolved = candidate.resolve(strict=False)
     except (OSError, FileNotFoundError):
         return
-    root = resolved_root if resolved_root is not None else plugin_root.resolve(strict=True)
+    root = resolved_root if resolved_root is not None else plugin_root.resolve(strict=False)
     if not resolved.is_relative_to(root):
         _fail(where, f"resolves to {resolved} which is outside the plugin root {root}")
 

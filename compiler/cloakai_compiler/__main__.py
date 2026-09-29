@@ -48,7 +48,7 @@ def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> li
     V.check_mcp_config(mcp_json, plugin_json["$schema"], str(plugin_root / "mcp.json"))
 
     # Pre-compute resolved plugin root once to avoid redundant realpath syscalls during checks
-    resolved_plugin_root = plugin_root.resolve(strict=True)
+    resolved_plugin_root = plugin_root.resolve(strict=False)
 
     skills_dir = plugin_root / "skills"
     skills = V.check_skills(skills_dir, str(skills_dir))
