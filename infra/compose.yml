@@ -26,7 +26,11 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
     volumes:
-      - ./litellm.yaml:/app/config.yaml:ro
+      # Absolute when dev.sh supplies it, relative-to-infra/ otherwise. It must NOT
+      # depend on --project-directory: that changed resolution to the repo root,
+      # so `./litellm.yaml` resolved to a path that did not exist, docker created an
+      # empty DIRECTORY there, and litellm silently started with no model list.
+      - ${CLOAKAI_LITELLM_CONFIG:-./litellm.yaml}:/app/config.yaml:ro
       # LiteLLM authenticates every request against a key database. Without one it
       # fails auth with a misleading "No connected db.", which surfaces to the
       # agent as an AI_APICallError rather than as a proxy problem.
@@ -95,7 +99,7 @@ services:
     image: python:3.12-slim
     command: ["python", "/srv/upstream.py"]
     volumes:
-      - ./mock-upstream.py:/srv/upstream.py:ro
+      - ${CLOAKAI_MOCK_UPSTREAM:-./mock-upstream.py}:/srv/upstream.py:ro
     networks: [egress]
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4001/v1/models', timeout=5).status==200 else 1)\""]
@@ -134,7 +138,10 @@ services:
     volumes:
       # The ONE intentional exception to "no host mounts". Scoped to a single
       # project directory, by choice, not by anything the spec enforces.
-      - ${AGENT_PROJECT:-..}:/workspace
+      # Relative to the compose PROJECT DIRECTORY, which scripts/dev.sh pins to the
+      # repo root via --project-directory. Resolved from infra/ instead, a relative
+      # AGENT_PROJECT would silently mount infra/ rather than the project.
+      - ${AGENT_PROJECT:-.}:/workspace
     working_dir: /workspace
     # --read-only with four tmpfs mounts, one per writable path the agent needs
     # (/tmp, /root/.local, /root/.config, /root/.cache). Each is required and each

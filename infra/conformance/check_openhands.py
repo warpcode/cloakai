@@ -52,12 +52,23 @@ if not found:
 ok(f"discovered {len(found)} skills: {', '.join(found_names)}")
 
 # The generated tree must agree with the source: no skill lost in compilation.
-source = sorted(p.name for p in (PLUGIN.parent / "skills").iterdir() if p.is_dir()) \
-    if (PLUGIN.parent / "skills").is_dir() else found_names
-if sorted(found_names) != sorted(source):
-    bad(f"generated skills differ from the source: {found_names} vs {source}")
+#
+# This previously fell back to comparing found_names against ITSELF when the
+# source directory was absent — which it always was, because nothing mounted it.
+# So the check reported a green that meant nothing. There is no fallback now: if
+# the source is not mounted, that is an error, not a pass.
+SOURCE = Path(os.environ.get("CLOAKAI_SOURCE_SKILLS", "/check/source_skills"))
+if not SOURCE.is_dir():
+    bad(f"the source skills directory is not mounted at {SOURCE}, so this check "
+        f"cannot run — mount plugins/<plugin>/skills there")
 else:
-    ok("every source skill survived compilation")
+    source = sorted(p.name for p in SOURCE.iterdir()
+                    if p.is_dir() and not p.name.startswith("."))
+    if sorted(found_names) != source:
+        bad(f"generated skills differ from the source: {found_names} vs {source}")
+    else:
+        ok(f"every source skill survived compilation ({len(source)} skills)")
+
 
 # ---------------------------------------------------------------- strict load
 section("strict load (the mode a real client uses)")

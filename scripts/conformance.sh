@@ -60,8 +60,12 @@ fi
 # Order matters: every flag must precede the image name, or docker passes it to
 # the entrypoint as an argument. Appending `-e` after the image looked correct and
 # silently turned the live probe into a permanent skip.
+# The SOURCE skills are mounted too, so the "every source skill survived
+# compilation" check compares against something real instead of comparing the
+# generated list against itself.
 args=(docker run --rm --network "$NETWORK"
       -v "$PWD/dist/$PLUGIN:/check/plugin:ro"
+      -v "$PWD/plugins/$PLUGIN/skills:/check/source_skills:ro"
       -v "$PWD/infra/conformance/check_openhands.py:/check/check.py:ro")
 [ -n "$MCP_URL" ] && args+=(-e "CLOAKAI_MCP_URL=$MCP_URL")
 args+=(--entrypoint python3 "$IMAGE" /check/check.py)
