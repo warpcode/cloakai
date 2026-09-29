@@ -47,16 +47,19 @@ def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> li
     mcp_json = V.load_json(plugin_root / "mcp.json")
     V.check_mcp_config(mcp_json, plugin_json["$schema"], str(plugin_root / "mcp.json"))
 
+    # Pre-compute resolved plugin root once to avoid redundant realpath syscalls during checks
+    resolved_plugin_root = plugin_root.resolve(strict=True)
+
     skills_dir = plugin_root / "skills"
     skills = V.check_skills(skills_dir, str(skills_dir))
     for name in skills:
         for child in (skills_dir / name).iterdir():
-            V.check_no_escape(plugin_root, child, str(child))
+            V.check_no_escape(plugin_root, child, str(child), resolved_root=resolved_plugin_root)
 
     agent = agent_doc(plugin_root)
     agent_path = plugin_root / NAMESPACE / "agent.json"
     agent.setdefault("name", plugin_json["name"])
-    V.check_no_escape(plugin_root, agent_path, str(agent_path))
+    V.check_no_escape(plugin_root, agent_path, str(agent_path), resolved_root=resolved_plugin_root)
 
     # ---- emit ----
     written: list[Path] = []
