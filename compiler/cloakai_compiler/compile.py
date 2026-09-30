@@ -129,10 +129,11 @@ def render_agent_body(plugin_root: Path, agent: dict, frontmatter: dict | None =
 
 
 def agent_doc(plugin_root: Path) -> dict:
+    from . import validate as V
     path = plugin_root / NAMESPACE / "agent.json"
-    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc = V.load_json(path)
     if not isinstance(doc, dict):
-        raise ValueError(f"{path}: must be a JSON object")
+        V._fail(str(path), "must be a JSON object")
     return doc
 
 
@@ -185,10 +186,10 @@ version: "16"
 models:
   proxy-model:
     provider: openai
-    model: {model_id}
-    base_url: {proxy}
+    model: {yaml_scalar(model_id)}
+    base_url: {yaml_scalar(proxy)}
 agents:
-  {name}:
+  {yaml_scalar(name)}:
     description: {yaml_scalar(agent.get("description", ""))}
     instruction_file: instructions.md
     model: proxy-model

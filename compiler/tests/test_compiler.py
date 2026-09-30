@@ -564,6 +564,38 @@ class TestLint(Sandbox):
         (self.plugin / "skills" / "code-review").symlink_to(outside)
         self.assertFailsNaming("symlink")
 
+    def test_agent_json_symlink_escape(self):
+        agent_path = self.plugin / "io.github.warpcode.cloakai" / "agent.json"
+        agent_path.unlink()
+        agent_path.symlink_to("/nonexistent/path/outside/agent.json")
+        self.assertFailsNaming("outside the plugin root")
+
+    def test_agent_json_missing(self):
+        agent_path = self.plugin / "io.github.warpcode.cloakai" / "agent.json"
+        agent_path.unlink()
+        self.assertFailsNaming("missing")
+
+    def test_agent_json_unparseable(self):
+        agent_path = self.plugin / "io.github.warpcode.cloakai" / "agent.json"
+        agent_path.write_text("{ unparseable", encoding="utf-8")
+        self.assertFailsNaming("unparseable")
+
+    def test_agent_yaml_escapes_special_chars(self):
+        agent_path = self.plugin / "io.github.warpcode.cloakai" / "agent.json"
+        doc = json.loads(agent_path.read_text())
+        doc["name"] = "agent\n  injected: true"
+        doc["upstream"] = {
+            "id": "model\n  injected: true",
+            "base_url": "http://litellm:4000/v1\n  injected: true",
+        }
+        agent_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        r = self.compile()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = (self.cwd / "dist" / "dev" / "agent.yaml").read_text(encoding="utf-8")
+        self.assertIn('"agent\\n  injected: true"', text)
+        self.assertIn('"model\\n  injected: true"', text)
+        self.assertIn('"http://litellm:4000/v1\\n  injected: true"', text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

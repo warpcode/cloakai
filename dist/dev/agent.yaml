@@ -13,10 +13,10 @@ version: "16"
 models:
   proxy-model:
     provider: openai
-    model: default
-    base_url: http://litellm:4000/v1
+    model: "default"
+    base_url: "http://litellm:4000/v1"
 agents:
-  dev:
+  "dev":
     description: "Development agent. Reviews changes for correctness, security and maintainability, and writes release notes from a diff. Use for code review, pull request feedback, and preparing a release summary."
     instruction_file: instructions.md
     model: proxy-model
