@@ -179,6 +179,184 @@ justification for the whole design, so it should never be quietly taken.
 
 ---
 
+## The topologies, drawn
+
+Three requirements cannot all hold on one flat network:
+
+1. agents call peers **directly** (the current design)
+2. agents must **not** reach the gateway
+3. the gateway **must** hold the Docker socket
+
+Network attachment is not directional. Measured: everything on `internal` is mutually reachable,
+A→B and B→A both work. So if the gateway and the agents share a network, requirement 2 fails
+regardless of naming.
+
+### Today
+
+```
+┌─ internal: true ──────── no route off this machine ─────────────────────┐
+│                                                                          │
+│   ┌─────────┐                          ┌─────────┐                      │
+│   │ agent A │◀────────────────────────▶│ agent B │   every peer can      │
+│   └────┬────┘       FULL MESH          └────┬────┘   reach every peer    │
+│        │                                  │                           │
+│        │  docker.sock = root on host      │                           │
+│        └──────────────┬───────────────────┘                           │
+│                       ▼                                               │
+│              ┌─────────────────┐                                      │
+│              │ GATEWAY         │◀──────── agents can reach it,         │
+│              │ holds the       │           and it holds the socket    │
+│              │ docker socket   │                                      │
+│              └────────┬────────┘                                      │
+└───────────────────────┼──────────────────────────────────────────────┘
+                        │  only route off the host
+                        ▼
+                   the internet
+```
+
+### How reachability gets enforced — bind to one interface
+
+The gateway is physically on both networks. It only **listens** on one.
+
+```
+┌─ network: client-facing ────────────────────────────────────────────────┐
+│                                                                            │
+│   clients ──── HTTP ────▶ ┌───────────────────────────────┐              │
+│                            │ GATEWAY                        │              │
+│                            │                                │              │
+│                            │  LISTENING  on 10.0.1.5:4483  │              │
+│                            │            ▲                   │              │
+│                            │            └── this network    │              │
+│                            │                                │              │
+│                            │  NOT listening on 10.0.2.5     │              │
+│                            └───────────────┬────────────────┘              │
+└────────────────────────────────────────────┼───────────────────────────────┘
+                                             │
+┌─ network: internal (true) ─────────────────┼───────────────────────────────┐
+│                                            │                               │
+│   ┌─────────┐                        ┌─────┴──────┐                        │
+│   │ agent A │◀──────────────────────▶│  agent B   │   peer calls: fine    │
+│   └─────────┘                        └────────────┘                        │
+│                                                                          │
+│   agent A ──▶ 10.0.2.5:4483  ──▶  connection refused                     │
+│                                     (nothing is bound there)             │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Reachability is not blocked by a rule. It is **absent** — no listener on that address, so the kernel
+refuses. No firewall, no forwarder, no extra container. About ten lines to discover its own address at
+startup.
+
+### The three configurations
+
+These are not six independent choices. **Enforcing Q6 eliminates one of the Q5 options**, because an
+agent that cannot reach the gateway cannot route peer calls through it. So they are three coherent
+configurations.
+
+#### Config 1 — one network per agent
+
+```
+┌─ net-a ──────────┐   ┌─ net-b ──────────┐   ┌─ client-facing ────┐
+│                  │   │                  │   │                    │
+│  ┌────────────┐  │   │  ┌────────────┐  │   │  clients ──▶ ┌────┴────┐
+│  │  agent A   │  │   │  │  agent B   │  │   │             │ GATEWAY │
+│  └────────────┘  │   │  └────────────┘  │   │             └────┬────┘
+│                  │   │                  │   │                  │
+└──────────────────┘   └──────────────────┘   └──────────────────┘
+        ▲                                          │
+        └──────────── can never talk ────────────────┘
+
+  Q6 enforced (structurally)   Q5 moot — no peer calls exist
+```
+
+Q6 enforced structurally. Q5 is moot because the capability is gone. The cost is that agent-to-agent
+delegation is gone with it, plus a network and a discovery mechanism per agent.
+
+#### Config 2 — everything routes through the gateway
+
+```
+┌─ client-facing ─────────────────────────────────────────────────────────┐
+│   clients ──────▶ ┌──────────────────────────────────────────┐            │
+│                   │ GATEWAY  · docker socket · HOP COUNTER    │            │
+│                   │ every call passes through here            │            │
+│                   └───┬──────────────────────────┬───────────┘            │
+└───────────────────────┼──────────────────────────┼────────────────────┘
+                        │                          │
+┌─ internal (true) ─────┼──────────────────────────┼────────────────────┐
+│                        ▼                          ▼                    │
+│                  ┌────────────┐            ┌────────────┐              │
+│                  │  agent A   │───────────▶│  agent B   │              │
+│                  └────────────┘  (via gw)  └────────────┘              │
+│                                                                        │
+│   agent A ──▶ gateway  ✓ REACHABLE — socket exposure, bounded by cap   │
+└────────────────────────────────────────────────────────────────────────┘
+
+  Q5 enforced   Q6 deliberately relaxed   agents CAN spawn containers
+```
+
+Q5 enforced, because the gateway sees every call and can count depth. Q6 is **deliberately relaxed**,
+which means an agent can reach the component holding the Docker socket — bounded by the Q3 cap, but
+reachable. It is also the only configuration where the hop counter is meaningful.
+
+#### Config 3 — direct peers, gateway unreachable *(recommended)*
+
+```
+┌─ client-facing ─────────────────────────────────────────────────────────┐
+│   clients ──────▶ ┌──────────────────────────────────────────┐            │
+│                   │ GATEWAY  · docker socket · spawns only   │            │
+│                   │ listening here; blind on 10.0.2.5        │            │
+│                   └───┬──────────────────────────────────────┘            │
+└───────────────────────┼────────────────────────────────────────────────┘
+                        │ spawns
+┌─ internal (true) ─────┼────────────────────────────────────────────────┐
+│                        ▼                                                │
+│                  ┌────────────┐            ┌────────────┐                │
+│                  │  agent A   │◀──────────▶│  agent B   │  peers: direct │
+│                  └────────────┘            └────────────┘                │
+│                                                                        │
+│   agent A ──▶ gateway  ✗ refused — no listener on this network          │
+│                                                                        │
+│   no depth counter anywhere; bounded by Q3's cap + peer container limits │
+└────────────────────────────────────────────────────────────────────────┘
+
+  Q6 enforced   Q5 NOT enforced   gateway stays small, agents stay isolated
+```
+
+### Compared
+
+| | A↔B calls | Agent reaches gateway | Depth bounded by | Cost |
+|---|---|---|---|---|
+| **Today** | yes | **yes** | nothing | — |
+| **Config 1** | impossible | no | n/a | lose delegation; dynamic networks |
+| **Config 2** | via gateway | **yes** | hop counter | chokepoint; socket exposed |
+| **Config 3** | direct | no | cap + container limits | no depth guarantee |
+
+### Why Config 3 is safe enough
+
+**Peer calls do not spawn anything.** A→B→A reuses long-lived `mcp` containers that already exist.
+The only component that spawns containers is the gateway, and Q3's cap governs that.
+
+So a runaway chain is bounded by the **peer container's own limits** — 1024 pids, 4 GB — rather than
+by anything unlimited. The harm is load, not a 4 GB leak.
+
+The residual cost is honest: there is **no hard depth guarantee**. That is a decision to stop defending
+against a runaway chain, not a claim that one is impossible, and it holds only while the cap is
+enforced and treated as a safety property rather than a throughput knob.
+
+### The question that decides it
+
+Does agent-to-agent delegation need to exist, and if so does it need a depth **proof** (Config 2's hop
+counter, for audit or billing) or only a depth **bound** (Config 3)?
+
+The plugin currently has **one agent**, so nothing needs peer calls today. Building Config 1 for a
+capability nothing uses would be speculative complexity of the kind that has caused most of the
+rework so far.
+
+**Recommendation: Config 3**, on the grounds that a bound is sufficient and Config 3 is the cheapest
+way to keep delegation while enforcing the security property that actually matters.
+
+---
+
 ## Q5 — Hop limit: not implementable as designed
 
 **Answer: the hop limit and the "agents call peers directly" design are mutually exclusive.**
