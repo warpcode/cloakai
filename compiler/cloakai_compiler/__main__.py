@@ -59,10 +59,10 @@ def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> li
         for descendant in (skills_dir / name).rglob("*"):
             V.check_no_escape(plugin_root, descendant, str(descendant), resolved_root=resolved_plugin_root)
 
-    agent = agent_doc(plugin_root)
     agent_path = plugin_root / NAMESPACE / "agent.json"
-    agent.setdefault("name", plugin_json["name"])
     V.check_no_escape(plugin_root, agent_path, str(agent_path), resolved_root=resolved_plugin_root)
+    agent = agent_doc(plugin_root)
+    agent.setdefault("name", plugin_json["name"])
 
     # ---- emit ----
     written: list[Path] = []
