@@ -37,6 +37,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from . import jules_client as jules
+from .jules_client import _verdict
 
 mcp = MCPServer("cloakai-jules")
 
@@ -167,8 +168,13 @@ def jules_status(session_id: str, activity_limit: int = 10) -> str:
     except Exception as exc:
         return _fail(exc)
     out = [_session_summary(session)]
+
+    # The full timeline first, because the verdict needs it. A page of it cannot
+    # tell "finished" from "never looked far enough back".
     try:
-        for activity in jules.activities(session_id, page_size=activity_limit):
+        timeline, complete = jules.timeline(session_id)
+        out.extend(_verdict(session, timeline, complete))
+        for activity in timeline[-activity_limit:]:
             label, detail = _describe(activity)
             out.append(f"  - {label}" + (f": {detail}" if detail else ""))
     except Exception as exc:

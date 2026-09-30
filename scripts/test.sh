@@ -18,6 +18,18 @@ no()   { printf '  \033[31m✗\033[0m %s\n' "$*"; fail=$((fail+1)); }
 sk()   { printf '  \033[33m–\033[0m %s\n' "$*"; skip=$((skip+1)); }
 head_() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# ---------------------------------------------------------------- jules image
+head_ "jules"
+# The finished-or-parked verdict. Stdlib-only, so it runs here rather than needing
+# the image, and it is the one piece of the Jules image with no live example: a
+# parked session cannot be produced without deliberately abandoning one.
+if python3 -m unittest discover -s agents/jules-mcp -p "test_*.py" -t . 2>&1 | tail -3 | grep -q "^OK"; then
+  ok "verdict unit tests"
+else
+  no "verdict unit tests"
+  python3 -m unittest discover -s agents/jules-mcp -p "test_*.py" -t . 2>&1 | tail -20
+fi
+
 # ---------------------------------------------------------------- gateway
 head_ "gateway"
 # Pure tests: the dispatcher builds a docker command line, and a mock must never
