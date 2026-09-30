@@ -336,11 +336,15 @@ def _read_block(lines: list[str], start: int, where: str) -> tuple[str, int]:
     return "\n".join(trimmed), i
 
 
-def check_no_escape(plugin_root: Path, candidate: Path, where: str) -> None:
-    """Reject any path that resolves outside the plugin root, following symlinks."""
+def check_no_escape(plugin_root: Path, candidate: Path, where: str, resolved_root: Path | None = None) -> None:
+    """Reject any path that resolves outside the plugin root, following symlinks.
+
+    Performance optimization: accepts optional `resolved_root` to avoid
+    repeating `plugin_root.resolve(strict=False)` filesystem syscalls in loops.
+    """
     try:
         resolved = candidate.resolve(strict=False)
-        root = plugin_root.resolve(strict=False)
+        root = resolved_root if resolved_root is not None else plugin_root.resolve(strict=False)
     except (OSError, RuntimeError) as exc:
         _fail(where, f"cannot resolve path safely: {exc}")
     if not resolved.is_relative_to(root):
