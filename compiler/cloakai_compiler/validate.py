@@ -344,9 +344,9 @@ def check_no_escape(plugin_root: Path, candidate: Path, where: str, resolved_roo
     """
     try:
         resolved = candidate.resolve(strict=False)
+        root = resolved_root if resolved_root is not None else plugin_root.resolve(strict=False)
     except (OSError, RuntimeError) as exc:
         _fail(where, f"cannot resolve path safely: {exc}")
-    root = resolved_root if resolved_root is not None else plugin_root.resolve(strict=False)
     if not resolved.is_relative_to(root):
         _fail(where, f"resolves to {resolved} which is outside the plugin root {root}")
 

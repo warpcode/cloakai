@@ -46,6 +46,21 @@ else
   no "compile failed"
 fi
 
+# ---------------------------------------------------------------- reaper
+# The leak guard for per-call containers. Only meaningful once a gateway exists,
+# but the reaper is standalone and testable now, and a leak guard that is written
+# and verified later is a leak guard that does not exist.
+head_ "per-call container reaper"
+if [ "${SKIP_ISOLATION:-0}" = "1" ] || ! command -v docker >/dev/null 2>&1; then
+  sk "docker not available"
+elif ! docker network inspect "${CLOAKAI_NETWORK:-cloakai-internal}" >/dev/null 2>&1; then
+  sk "no internal network"
+elif python3 scripts/test_reaper.py; then
+  ok "the reaper spares live calls and reaps hung ones"
+else
+  no "THE REAPER IS WRONG — it would kill live calls, or leak hung ones"
+fi
+
 # ---------------------------------------------------------------- conformance
 head_ "generated output conforms to each client's expectations"
 
@@ -154,6 +169,22 @@ else
   else
     no "ISOLATION BREACH — see the failing assertion above"
   fi
+fi
+
+# ---------------------------------------------------------------- conformance
+# A real client loading what we generated. This is the only layer that can catch
+# "the client silently dropped it", which is the failure the whole compiler
+# exists to prevent. Needs the built conformance image; skipped, never failed,
+# when Docker or the network is absent.
+head_ "client conformance"
+if [ "${SKIP_CONFORMANCE:-0}" = "1" ]; then
+  sk "skipped via SKIP_CONFORMANCE=1"
+elif ! command -v docker >/dev/null 2>&1; then
+  sk "docker not available"
+elif ./scripts/conformance.sh; then
+  ok "a real client loaded the generated plugin"
+else
+  no "A REAL CLIENT REJECTED OUR OUTPUT — see the failure above"
 fi
 
 # ---------------------------------------------------------------- summary

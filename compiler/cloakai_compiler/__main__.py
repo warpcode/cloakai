@@ -40,19 +40,18 @@ def clean_output(dist_root: Path, clients_root: Path) -> None:
 
 
 def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> list[Path]:
-    # ---- validate source before emitting anything (fail loudly, early) ----
-    plugin_json = V.load_json(plugin_root / "plugin.json")
-    V.check_plugin_manifest(plugin_json, str(plugin_root / "plugin.json"))
-
-    mcp_json = V.load_json(plugin_root / "mcp.json")
-    V.check_mcp_config(mcp_json, plugin_json["$schema"], str(plugin_root / "mcp.json"))
-
     # Pre-compute resolved plugin root once to avoid redundant realpath syscalls during checks
     resolved_plugin_root = plugin_root.resolve(strict=False)
 
     for file_name in ("plugin.json", "mcp.json"):
         path = plugin_root / file_name
         V.check_no_escape(plugin_root, path, str(path), resolved_root=resolved_plugin_root)
+
+    plugin_json = V.load_json(plugin_root / "plugin.json")
+    V.check_plugin_manifest(plugin_json, str(plugin_root / "plugin.json"))
+
+    mcp_json = V.load_json(plugin_root / "mcp.json")
+    V.check_mcp_config(mcp_json, plugin_json["$schema"], str(plugin_root / "mcp.json"))
 
     skills_dir = plugin_root / "skills"
     skills = V.check_skills(skills_dir, str(skills_dir))

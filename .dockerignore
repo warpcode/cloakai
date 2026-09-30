@@ -13,3 +13,6 @@ agents/README.md
 **/*.pyc
 .venv/
 README.md
+
+# The conformance image builds from its own context; keep the root context small.
+infra/conformance/

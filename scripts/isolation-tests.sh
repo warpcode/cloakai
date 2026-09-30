@@ -72,6 +72,63 @@ if docker ps --format '{{.Names}}' | grep -q litellm; then proxy_up=1; fi
 
 head_ "isolation"
 
+# --- 0. the compose-managed agent is itself isolated ---------------------------
+# Every other test in this file uses a THROWAWAY container built from the same
+# flags. That leaves a gap: the long-lived container a supervisor actually keeps
+# running is a different object, created by compose from YAML rather than from
+# the word list. If compose silently dropped a flag, every other test would still
+# pass. So check the real service when it is running.
+# Defaulted rather than left empty: invoking this script directly used to skip
+# Test 0 entirely, because an empty service name can never match. The "not
+# running" branch below still skips cleanly when the stack is down.
+AGENT_SERVICE="${AGENT_SERVICE:-dev-agent}"
+AGENT_CID=$(docker compose -f "${COMPOSE_FILE:-infra/compose.yml}" ps -q "$AGENT_SERVICE" 2>/dev/null | head -1 || true)
+if [ -z "$AGENT_CID" ]; then
+  sk "0. compose service '$AGENT_SERVICE' is not running — start it with ./scripts/dev.sh up"
+elif ! docker inspect -f '{{.State.Running}}' "$AGENT_CID" 2>/dev/null | grep -q true; then
+  no "0. THE COMPOSE AGENT IS NOT RUNNING — the supervised container is down"
+else
+  # A real model call through the compose agent, using a freshly scoped key.
+  MASTER="${LITELLM_MASTER_KEY:-sk-cloakai-dev-not-a-secret}"
+  VK=$(docker run --rm --network "$NETWORK" curlimages/curl:latest -s \
+         -X POST http://litellm:4000/key/generate \
+         -H 'Content-Type: application/json' -H "Authorization: Bearer $MASTER" \
+         -d "{\"models\":[\"default\"],\"max_budget\":1.0,\"budget_duration\":\"24h\",\"key_alias\":\"svc-$$-$(date +%s)\"}" \
+         2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])" 2>/dev/null || true)
+  CFG=$(CLOAKAI_VK="${VK:-none}" python3 -c '
+import json, os
+print(json.dumps({
+    "model": "cloakai/default",
+    "provider": {"cloakai": {
+        "npm": "@ai-sdk/openai-compatible", "name": "cloakai proxy",
+        "options": {"baseURL": "http://litellm:4000/v1", "apiKey": os.environ["CLOAKAI_VK"]},
+        "models": {"default": {"name": "default"}},
+    }},
+    "permission": {"edit": "allow", "bash": "allow"},
+}))')
+  svc_reply=$(timeout 240 docker exec -e OPENCODE_CONFIG_CONTENT="$CFG" -e OPENCODE_API_KEY="${VK:-none}" \
+                -e OPENCODE_DISABLE_MODELS_FETCH=1 "$AGENT_CID" \
+                opencode run --auto "reply with exactly PONG" 2>&1 | tail -4)
+  if echo "$svc_reply" | grep -q PONG; then
+    ok "0. the compose-managed agent is up and can reach the proxy"
+  else
+    no "0. THE COMPOSE AGENT CANNOT REACH THE PROXY: $(echo "$svc_reply" | tr '\n' ' ' | cut -c1-160)"
+  fi
+
+  # And it is still isolated: the flags compose was given, actually applied.
+  ro=$(docker exec "$AGENT_CID" sh -c 'touch /probe-write 2>/dev/null; test ! -e /probe-write && echo ro' 2>/dev/null)
+  [ "$ro" = "ro" ] && ok "0b. the compose agent's root filesystem is read-only" \
+                    || no "0b. THE COMPOSE AGENT'S ROOT FILESYSTEM IS WRITABLE"
+
+  sock=$(docker exec "$AGENT_CID" sh -c 'test -e /var/run/docker.sock && echo present || echo absent' 2>/dev/null)
+  [ "$sock" = "absent" ] && ok "0c. the compose agent has no Docker socket" \
+                         || no "0c. THE COMPOSE AGENT HAS A DOCKER SOCKET"
+
+  cap=$(docker exec "$AGENT_CID" sh -c 'awk "/^CapEff:/{print \$2}" /proc/self/status' 2>/dev/null | tr -d '\r')
+  [ "$cap" = "0000000000000000" ] && ok "0d. the compose agent has all capabilities dropped" \
+                                 || no "0d. THE COMPOSE AGENT RETAINS CAPABILITIES (CapEff=0x${cap:-?})"
+fi
+
 # --- 1. no docker socket -----------------------------------------------------
 # If the agent can reach the daemon it can start a sibling container, and the
 # isolation model is decorative.
@@ -264,6 +321,47 @@ print(json.dumps({
 else
   sk "8. model call — litellm not running. Start it and re-run."
 fi
+
+# --- 9. resource limits actually apply ----------------------------------------
+# A limit that silently does nothing turns resource exhaustion into a host-level
+# problem, and the failure mode is invisible until something runs away. Compose
+# does honour mem_limit, but that is worth asserting rather than assuming.
+#
+# $$ escapes compose interpolation; without it the perl variable is eaten.
+OOM_FILE=$(mktemp)
+cat > "$OOM_FILE" <<'YAML'
+services:
+  oom-victim:
+    image: debian:bookworm-slim
+    command: ["perl", "-e", "my $$x = q{y} x 400_000_000; print length($$x)"]
+    mem_limit: 96m
+    networks: [internal]
+networks:
+  internal:
+    internal: true
+    name: cloakai-oomtest
+YAML
+# Let compose own BOTH the container and the network. Creating the network by hand
+# first made compose warn that it had not created it, and meant an interrupted run
+# left the network and a temp file behind.
+#
+# --project-name pins the container name: compose otherwise derives it from the
+# directory, and this file lives in a mktemp dir, so the name was unpredictable.
+# The trap covers SIGINT, so an aborted test run still cleans up.
+cleanup_oom() {
+  docker compose -p cloakai-oomtest -f "$OOM_FILE" down --remove-orphans >/dev/null 2>&1 || true
+  rm -f "$OOM_FILE"
+}
+trap cleanup_oom EXIT INT TERM
+
+timeout 180 docker compose -p cloakai-oomtest -f "$OOM_FILE" up --abort-on-container-exit >/dev/null 2>&1
+oom_state=$(docker inspect cloakai-oomtest-oom-victim-1 --format '{{.State.OOMKilled}}/{{.State.ExitCode}}' 2>/dev/null || echo "missing")
+cleanup_oom
+
+case "$oom_state" in
+  true/137) ok "9. mem_limit is enforced — the container was OOM-killed at the limit, not the host" ;;
+  *)        no "9. MEMORY LIMIT NOT ENFORCED (state=$oom_state) — resource exhaustion would become a host problem" ;;
+esac
 
 head_ "summary"
 printf '  %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"
