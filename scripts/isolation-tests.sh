@@ -196,42 +196,93 @@ else
 fi
 
 # --- 5. two concurrent invocations are isolated ------------------------------
-# Should hold trivially, because there is no shared volume. The test documents
-# and protects the property rather than discovering it.
 #
-# POSITIVE CONTROLS FIRST. Both containers must demonstrably be running and
-# readable by themselves. Without this, a container that failed to start made
-# both `docker exec` calls return empty, which looks exactly like isolation and
-# silently passes — the one thing this suite exists to avoid.
-a="probe-a-$$"; b="probe-b-$$"
-docker rm -f "$a" "$b" >/dev/null 2>&1
-docker run -d --rm --name "$a" "${ISOLATION_FLAGS[@]}" "$IMAGE" \
-  shell -c "echo A > /tmp/$a.marker; sleep 20" >/dev/null 2>&1 &
+# This test previously wrote its markers to /tmp and reported "two concurrent
+# invocations cannot see each other's files". That was FALSE as a statement about
+# the system: run.sh and compose both bind-mount a host directory at /workspace,
+# so two invocations on the same project DID share files. Demonstrated:
+#
+#     B READS: [A private data]
+#     === what survived === B CLOBBERS
+#
+# It was green because it only exercised tmpfs, which was never the requirement.
+# The requirement is that an invocation has NO shared working directory BY DEFAULT.
+#
+# /tmp is where the markers go because it is the only writable location in a
+# default invocation — which is the point. 5b asserts the absence of a mount, and
+# 5c proves that mount is what creates sharing, so 5 is not passing trivially.
+
+WS=$(mktemp -d)
+# mktemp -d is 0700, and cap-drop=ALL takes CAP_DAC_OVERRIDE away from the
+# container's root, so it CANNOT write into a 0700 directory. Any host directory
+# mounted into an isolated container must be writable by the container's uid.
+chmod 777 "$WS"
+A="probe-a-$$"; B="probe-b-$$"
+docker rm -f "$A" "$B" >/dev/null 2>&1
+
+launch() { # name, [extra docker args...]
+  local n="$1"; shift
+  docker run -d --rm --name "$n" "${ISOLATION_FLAGS[@]}" "$@" "$IMAGE" \
+    shell -c "echo $n > /tmp/$n.marker; sleep 20" >/dev/null 2>&1
+}
+
+launch "$A" &
 pa=$!
-docker run -d --rm --name "$b" "${ISOLATION_FLAGS[@]}" "$IMAGE" \
-  shell -c "echo B > /tmp/$b.marker; sleep 20" >/dev/null 2>&1 &
+launch "$B" &
 pb=$!
 sleep 4
 
-self_a=$(docker exec "$a" cat "/tmp/$a.marker" 2>/dev/null || true)
-self_b=$(docker exec "$b" cat "/tmp/$b.marker" 2>/dev/null || true)
+# POSITIVE CONTROL: both alive and self-readable. Without it, "B could not see A"
+# is indistinguishable from "neither container started".
+self_a=$(docker exec "$A" cat "/tmp/$A.marker" 2>/dev/null || true)
+self_b=$(docker exec "$B" cat "/tmp/$B.marker" 2>/dev/null || true)
 
-if [ "$self_a" != "A" ] || [ "$self_b" != "B" ]; then
-  # Not a breach — the test could not run. Reporting it as a pass is exactly the
-  # false positive being fixed, so it is a failure.
-  no "5. COULD NOT RUN — a='$self_a' b='$self_b' (both containers must be up and self-readable before isolation is meaningful)"
+if [ -z "$self_a" ] || [ -z "$self_b" ]; then
+  no "5. COULD NOT RUN — a='$self_a' b='$self_b' (both containers must be up and self-readable first)"
 else
-  saw_a=$(docker exec "$b" cat "/tmp/$a.marker" 2>/dev/null || true)
-  saw_b=$(docker exec "$a" cat "/tmp/$b.marker" 2>/dev/null || true)
-  if [ -z "$saw_a" ] && [ -z "$saw_b" ]; then
-    ok "5. two concurrent invocations cannot see each other's files (both self-reads verified)"
+  saw=$(docker exec "$B" cat "/tmp/$A.marker" 2>/dev/null || true)
+  if [ -z "$saw" ]; then
+    ok "5. two default invocations cannot see each other's files"
   else
     no "5. ONE RUN SAW THE OTHER'S FILES — there is shared writable state"
   fi
 fi
 
-docker rm -f "$a" "$b" >/dev/null 2>&1
+# 5b — the assertion that would have caught the original bug. It fails the moment
+# a volume flag reappears in the default invocation.
+if docker inspect "$A" --format '{{range .Mounts}}{{.Destination}} {{end}}' 2>/dev/null | grep -qE '/workspace'; then
+  no "5b. THE DEFAULT INVOCATION MOUNTS A WORKSPACE — the shared directory is back"
+else
+  ok "5b. the default invocation mounts no working directory (workspace is opt-in)"
+fi
+
+docker rm -f "$A" "$B" >/dev/null 2>&1
 wait $pa $pb 2>/dev/null
+
+# 5c — the control for 5. If adding an explicit workspace does NOT produce sharing,
+# then 5 is passing for some other reason and proves nothing.
+C="probe-c-$$"; D="probe-d-$$"
+docker rm -f "$C" "$D" >/dev/null 2>&1
+# The markers go into /workspace here, NOT /tmp. A workspace mount does not affect
+# /tmp, so writing to /tmp and expecting sharing would fail for the wrong reason —
+# which is exactly what the first version of this control did.
+docker run -d --rm --name "$C" "${ISOLATION_FLAGS[@]}" -v "$WS:/workspace" "$IMAGE" \
+  shell -c "echo C-wrote-here > /workspace/$C.marker; sleep 20" >/dev/null 2>&1 &
+pc=$!
+docker run -d --rm --name "$D" "${ISOLATION_FLAGS[@]}" -v "$WS:/workspace" "$IMAGE" \
+  shell -c "sleep 5; echo D-wrote-here > /workspace/$D.marker; sleep 15" >/dev/null 2>&1 &
+pd=$!
+sleep 9
+shared=$(docker exec "$D" cat "/workspace/$C.marker" 2>/dev/null || true)
+if [ -n "$shared" ]; then
+  ok "5c. CONTROL: with a workspace explicitly mounted, invocations DO share it"
+  echo "     ^ which is what makes 5 meaningful, and why 5b is the real assertion"
+else
+  no "5c. CONTROL FAILED — mounting a workspace produced no sharing, so test 5 is passing for the wrong reason"
+fi
+docker rm -f "$C" "$D" >/dev/null 2>&1
+wait $pc $pd 2>/dev/null
+rm -rf "$WS"
 
 # --- 6. root filesystem is read-only -----------------------------------------
 if in_agent 'touch /should-not-exist 2>/dev/null; test ! -e /should-not-exist'; then

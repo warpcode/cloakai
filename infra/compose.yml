@@ -135,12 +135,17 @@ services:
   dev-agent:
     image: ${AGENT_IMAGE:-cloakai/dev:latest}
     command: ["mcp"]
+    # A workspace is OPT-IN, and it is opted into HERE, deliberately, for one
+    # reason: `dev.sh shell` is for poking at your own project interactively.
+    #
+    # This service is the interactive one. The gateway's per-call containers do
+    # NOT mount a workspace unless the call asks for one — that is the difference
+    # between dev and execution, and isolation test 5b asserts it.
+    #
+    # Set AGENT_PROJECT= (empty) to run this service with no workspace at all.
+    # Relative to the compose PROJECT DIRECTORY, which scripts/dev.sh pins to the
+    # repo root via --project-directory.
     volumes:
-      # The ONE intentional exception to "no host mounts". Scoped to a single
-      # project directory, by choice, not by anything the spec enforces.
-      # Relative to the compose PROJECT DIRECTORY, which scripts/dev.sh pins to the
-      # repo root via --project-directory. Resolved from infra/ instead, a relative
-      # AGENT_PROJECT would silently mount infra/ rather than the project.
       - ${AGENT_PROJECT:-.}:/workspace
     working_dir: /workspace
     # --read-only with four tmpfs mounts, one per writable path the agent needs

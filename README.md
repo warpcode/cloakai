@@ -53,13 +53,28 @@ mints its own single-model, one-dollar key to prove it.
 
 | | |
 |---|---|
-| **Isolated** | The host filesystem, except the project directory you mounted. The internet. Any provider credential. Sibling containers. |
-| **Available** | Your project directory, and the proxy on `internal`. |
-| **Not shared** | Nothing persists between runs. There is no writable volume, so there is nothing for two invocations to collide over. |
+| **Isolated** | The host filesystem. The internet. Any provider credential. Sibling containers. **Your project files — by default.** |
+| **Available** | The proxy on `internal`. Nothing else, unless you opt in. |
+| **Not shared** | Nothing persists between runs. There is no writable volume by default, so there is nothing for two invocations to collide over. |
 
-Two concurrent runs of the same agent cannot see each other's files, because they are different
-filesystems. That is structural rather than a mitigation — see [#14](https://github.com/warpcode/cloakai/issues/14)
-and `scripts/isolation-tests.sh`.
+### The workspace is opt-in
+
+`./scripts/run.sh` mounts **no host directory**. An isolated invocation cannot see your files at all,
+and two of them cannot interfere, because there is no shared path to interfere over.
+
+Most agents need no files. When one genuinely does — code review, for instance — opt in:
+
+```bash
+./scripts/run.sh --workspace . "review the diff on this branch"
+```
+
+That is a deliberate, visible choice, and it is where the guarantee stops. Two invocations that both
+opt into the same directory **will** share it, and will overwrite each other's files. Verified rather
+than assumed — `scripts/isolation-tests.sh` test 5c mounts a workspace deliberately and confirms the
+sharing appears, so test 5 is not passing for an unrelated reason.
+
+The `dev-agent` compose service opts in by default, because `dev.sh shell` exists to poke at your
+project interactively. The gateway's per-call containers do not.
 
 ## How this fits together
 

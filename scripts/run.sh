@@ -6,11 +6,30 @@
 # are adding a flag, add the comment saying which failure demanded it.
 set -euo pipefail
 
+# A workspace is OPT-IN. Most agents need no files at all, and mounting a shared
+# host directory is the one thing that breaks the isolation guarantee: two
+# invocations on the same project would read and overwrite each other's files.
+# Demonstrated, and asserted by isolation test 5b/5c.
+#
+# Pass --workspace [PATH] to opt in. The default is no mount at all.
+WORKSPACE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --workspace)
+      WORKSPACE="${2:-$PWD}"; shift 2 ;;
+    --workspace=*)
+      WORKSPACE="${1#*=}"; shift ;;
+    *)
+      break ;;
+  esac
+done
+[ -n "$WORKSPACE" ] || WORKSPACE="${CLOAKAI_PROJECT:-}"
+
 # The caller's directory must be captured BEFORE we cd to the repo root.
 # Doing it afterwards made PROJECT_DIR resolve to the cloakai checkout itself, so
 # running this from any other project silently mounted cloakai's own source into
 # /workspace and ran the agent on the wrong tree.
-PROJECT_DIR="${CLOAKAI_PROJECT:-$PWD}"
+PROJECT_DIR="${WORKSPACE:-$PWD}"
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
@@ -121,8 +140,29 @@ print(json.dumps({
   fi
 fi
 
+# The mount is added only when a workspace was requested. It is never on by
+# default — see the note above and isolation test 5b.
+MOUNT=()
+if [ -n "$WORKSPACE" ]; then
+  if [ ! -d "$WORKSPACE" ]; then
+    echo "error: --workspace '$WORKSPACE' is not a directory" >&2
+    exit 1
+  fi
+  # With cap-drop=ALL the container's root loses CAP_DAC_OVERRIDE, so it cannot
+  # write into a directory it lacks permission for. Warn rather than fail, since
+  # a read-only workspace is a legitimate choice.
+  if [ ! -w "$WORKSPACE" ]; then
+    echo "warning: '$WORKSPACE' is not writable by uid $(id -u); the agent may not be able to edit files there." >&2
+  fi
+  MOUNT=(-v "$PROJECT_DIR:/workspace")
+  echo "note: mounting $PROJECT_DIR at /workspace (opted in)." >&2
+else
+  echo "note: no workspace mounted; the agent cannot see any host files." >&2
+fi
+
 exec docker run --rm "${TTY[@]}" \
-  -v "$PROJECT_DIR:/workspace" -w /workspace \
+  "${MOUNT[@]}" \
+  -w "${WORKSPACE:+/workspace}" \
   "${FLAGS[@]}" \
   "${CONFIG_ARGS[@]}" \
   "$IMAGE" run "$@"
