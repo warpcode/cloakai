@@ -18,6 +18,7 @@ PLUGIN_NAME_RE = re.compile(r"^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?
 ANTIGRAVITY_NAME_RE = re.compile(r"^[a-zA-Z0-9-_]+$")
 KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 CWD_RE = re.compile(r"^(?:\./|\$\{PLUGIN_ROOT\}(?:/|$)|\$\{PLUGIN_DATA\}(?:/|$))")
+STDIO_CMD_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 PLUGIN_TOP_LEVEL = {
     "$schema", "name", "version", "description", "author",
@@ -164,7 +165,7 @@ def check_server_entry(entry: Any, where: str) -> None:
         if not isinstance(command, str) or not command.strip():
             _fail(where, "'command' is required and must be a non-empty string")
         # Bare name, or a plugin-relative path.
-        if not re.match(r"^[A-Za-z0-9._-]+$", command) and not command.startswith("./"):
+        if not STDIO_CMD_RE.match(command) and not command.startswith("./"):
             _fail(where, f"'command' {command!r} must be a bare executable name or a "
                          f"'./'-prefixed plugin-relative path")
         if "args" in entry:
@@ -195,7 +196,7 @@ def check_server_entry(entry: Any, where: str) -> None:
 
 
 def check_remote_url(url: str, where: str) -> None:
-    if not re.match(r"^https?://", url):
+    if not (url.startswith("http://") or url.startswith("https://")):
         _fail(where, f"'url' must be absolute, got {url!r}")
     if "#" in url:
         _fail(where, f"'url' must not contain a fragment, got {url!r}")
@@ -336,11 +337,14 @@ def _read_block(lines: list[str], start: int, where: str) -> tuple[str, int]:
     return "\n".join(trimmed), i
 
 
-def check_no_escape(plugin_root: Path, candidate: Path, where: str) -> None:
-    """Reject any path that resolves outside the plugin root, following symlinks."""
+def check_no_escape(plugin_root: Path, candidate: Path, where: str, root_resolved: Path | None = None) -> None:
+    """Reject any path that resolves outside the plugin root, following symlinks.
+
+    Accepts optional root_resolved to avoid repeatedly resolving plugin_root in loops.
+    """
     try:
         resolved = candidate.resolve(strict=False)
-        root = plugin_root.resolve(strict=False)
+        root = root_resolved if root_resolved is not None else plugin_root.resolve(strict=False)
     except (OSError, RuntimeError) as exc:
         _fail(where, f"cannot resolve path safely: {exc}")
     if not resolved.is_relative_to(root):
