@@ -26,4 +26,5 @@ docker build \
 echo
 echo "built $IMAGE"
 echo "  run mode:  ./scripts/run.sh <prompt>"
-echo "  mcp mode:  docker run --rm -d --name cloakai-mcp --network cloakai-internal $IMAGE mcp"
+echo "  mcp (stdio): docker run --rm $IMAGE mcp        <- the portable contract"
+echo "  mcp-http:    docker run --rm -d --name cloakai-mcp --network cloakai-internal $IMAGE mcp-http"

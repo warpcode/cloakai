@@ -134,7 +134,10 @@ services:
   # ---------------------------------------------------------------------
   dev-agent:
     image: ${AGENT_IMAGE:-cloakai/dev:latest}
-    command: ["mcp"]
+    # mcp-http, not mcp. The dev-agent service is reached over the compose network
+    # by scripts/conformance.sh at http://dev-agent:8081/mcp. The portable stdio
+    # contract is `docker run --rm cloakai/dev mcp`, which needs no service.
+    command: ["mcp-http"]
     # A workspace is OPT-IN, and it is opted into HERE, deliberately, for one
     # reason: `dev.sh shell` is for poking at your own project interactively.
     #
