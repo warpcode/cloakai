@@ -3,7 +3,7 @@
   "mcp": {
     "agents": {
       "type": "remote",
-      "url": "http://cloakai-gateway:4483/mcp",
+      "url": null,
       "enabled": true,
       "oauth": false
     }
