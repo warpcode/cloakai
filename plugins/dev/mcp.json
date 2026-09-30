@@ -2,19 +2,8 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
   "mcpServers": {
     "agents": {
-      "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run",
-        "--rm",
-        "-i",
-        "--network",
-        "cloakai-internal",
-        "-e",
-        "OPENAI_API_KEY",
-        "cloakai/dev:latest",
-        "mcp"
-      ]
+      "type": "streamable-http",
+      "url": "http://dev-agent:8081/mcp"
     }
   }
 }
