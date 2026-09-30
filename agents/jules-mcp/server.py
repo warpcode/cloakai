@@ -57,10 +57,13 @@ def _session_summary(session: dict[str, Any]) -> str:
     conflating them is how a session gets abandoned mid-plan.
     """
     name = session.get("name", "?")
-    state = session.get("state", "UNKNOWN")
+    # The create response has no state field yet — the session exists but has not
+    # been scheduled. Printing "UNKNOWN" there reads like an error, and is the
+    # first thing a client sees, so say what it actually means.
+    state = session.get("state") or "STARTING"
     lines = [f"session {name.removeprefix('sessions/')}  state={state}"]
 
-    if state in GATED:
+    if state in GATED or state == "STARTING":
         lines.append(
             "  PARKED: waiting on a human. Approve the plan or send guidance, "
             "then check again. Do not treat this as finished."
@@ -79,6 +82,37 @@ def _session_summary(session: dict[str, Any]) -> str:
     source = (session.get("sourceContext") or {}).get("source")
     lines.append(f"  source: {source or 'none (project-less sandbox)'}")
     return "\n".join(lines)
+
+
+#: Activities are a union type keyed by a present field, not a field called
+#: "type". Guessing `type`/`kind` printed the literal word "activity" for every
+#: row, which told the caller nothing at all.
+_ACTIVITY_FIELDS = (
+    ("agentMessaged", "agent message"),
+    ("planGenerated", "plan generated"),
+    ("planApproved", "plan approved"),
+    ("userMessaged", "you said"),
+    ("progressUpdated", "progress"),
+)
+
+
+def _describe(activity: dict[str, Any]) -> tuple[str, str]:
+    """A human label and a short detail for one activity."""
+    for field, label in _ACTIVITY_FIELDS:
+        if field not in activity:
+            continue
+        payload = activity[field] or {}
+        text = (payload.get("agentMessage") or payload.get("prompt")
+                or payload.get("message") or "")
+        text = " ".join(str(text).split())
+        if len(text) > 160:
+            text = text[:157] + "..."
+        return label, text
+    # An unrecognised activity is still worth showing by its own key, so a new
+    # Jules event type is visible rather than silently dropped.
+    unknown = [k for k in sorted(activity)
+               if k.endswith("d") and k not in ("id", "name", "createTime")]
+    return (unknown[0] if unknown else "activity"), ""
 
 
 @mcp.tool(
@@ -135,8 +169,8 @@ def jules_status(session_id: str, activity_limit: int = 10) -> str:
     out = [_session_summary(session)]
     try:
         for activity in jules.activities(session_id, page_size=activity_limit):
-            kind = activity.get("type") or activity.get("kind") or "activity"
-            out.append(f"  - {kind}")
+            label, detail = _describe(activity)
+            out.append(f"  - {label}" + (f": {detail}" if detail else ""))
     except Exception as exc:
         # Status is still useful without the timeline, so this degrades rather
         # than discarding the part that worked.
