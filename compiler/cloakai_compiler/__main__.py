@@ -17,7 +17,8 @@ from pathlib import Path
 
 from .clients import NAMESPACE, TARGETS
 from .compile import (
-    agent_doc, emit_conformant, emit_namespace, emit_runtime, emit_via_strategy,
+    agent_doc, emit_conformant, emit_gateway, emit_namespace, emit_runtime,
+    emit_via_strategy,
 )
 from .context import Context
 from . import validate as V
@@ -79,6 +80,7 @@ def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> li
     # Our own container artifacts. Not one of the four rules — no client reads
     # these — but they must derive from agent.json like everything else.
     written += emit_runtime(plugin_root, agent, dist_root)
+    written += emit_gateway(plugin_root, agent, dist_root)
 
     return written
 

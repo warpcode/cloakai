@@ -23,6 +23,12 @@
   "isolation": {
     "network": "internal",
     "read_only": true,
+    "tmpfs": [
+      "/tmp",
+      "/root/.local",
+      "/root/.config",
+      "/root/.cache"
+    ],
     "cap_drop": [
       "ALL"
     ],
@@ -30,5 +36,10 @@
   },
   "mcp_servers": [
     "agents"
-  ]
+  ],
+  "env": {
+    "OPENCODE_API_KEY": "{{key}}",
+    "OPENCODE_DISABLE_MODELS_FETCH": "1",
+    "OPENCODE_CONFIG_CONTENT": "{\"model\":\"cloakai/{{model}}\",\"provider\":{\"cloakai\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"cloakai proxy\",\"options\":{\"baseURL\":\"{{base_url}}\",\"apiKey\":\"{{key}}\"},\"models\":{\"{{model}}\":{\"name\":\"{{model}}\"}}}},\"permission\":{\"edit\":\"allow\",\"bash\":\"allow\"}}"
+  }
 }

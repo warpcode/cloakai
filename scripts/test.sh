@@ -18,6 +18,18 @@ no()   { printf '  \033[31m✗\033[0m %s\n' "$*"; fail=$((fail+1)); }
 sk()   { printf '  \033[33m–\033[0m %s\n' "$*"; skip=$((skip+1)); }
 head_() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# ---------------------------------------------------------------- gateway
+head_ "gateway"
+# Pure tests: the dispatcher builds a docker command line, and a mock must never
+# assert the command line the manifest actually produces. They also run against
+# dist/gateway.json so the committed manifest cannot drift from the code.
+if python3 -m unittest discover -s gateway/tests -t . 2>&1 | tail -3 | grep -q "^OK"; then
+  ok "dispatcher unit tests"
+else
+  no "dispatcher unit tests"
+  python3 -m unittest discover -s gateway/tests -t . 2>&1 | tail -20
+fi
+
 # ---------------------------------------------------------------- compiler
 head_ "compiler"
 if PYTHONPATH="$ROOT/compiler" python3 -m unittest discover -s compiler/tests 2>&1 | tail -3 | grep -q "^OK"; then
