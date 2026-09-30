@@ -96,11 +96,14 @@ internet by being on `egress`, and only `litellm` is. To give the agent a new ca
 fetch, say — add a container on `internal` *and* `egress` that serves exactly that tool. Do not add a
 second network; adding a container to the existing two is the entire extension mechanism.
 
-The gateway — one endpoint that spawns a fresh container per call — is **not built yet**, and the
-seven design questions it depends on have been [measured rather than
-assumed](docs/gateway-verification.md). Two of the answers changed the design: a container survives
-its gateway dying (so the reaper cannot live inside the gateway), and a hop limit is unimplementable
-while agents call peers directly on a flat network.
+The gateway — one endpoint that spawns a fresh container per call — is **not built yet.** Its seven
+design questions were [answered by measurement](docs/gateway-verification.md), which produced a
+[decision](docs/gateway-verification.md#decision-2026-09-30--config-2-all-traffic-goes-through-the-gateway):
+**agents never talk directly to each other; all traffic is mediated by the gateway.** That is what
+makes the hop limit enforceable at all. The [design](docs/gateway-design.md) rests on one measured
+property — the gateway binds a separate listener per interface address, so a client cannot open the
+agent listener and vice versa, and call provenance comes from the kernel rather than a forgeable
+header.
 
 ### What is not automatic yet
 
