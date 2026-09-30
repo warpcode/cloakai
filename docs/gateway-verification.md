@@ -16,8 +16,8 @@ and **one of them turns out to be architecturally contradictory as written.**
 | 2 | Timeouts and cancellation | **A container survives its gateway dying.** A reaper is mandatory and must live outside the gateway. **Built and tested.** | High — reproduced + tested |
 | 3 | Concurrency limits | **Memory binds before CPU**, at roughly 3 concurrent with the real flags. Cap and queue. | High — measured |
 | 4 | Cold-start cost | **Warm pool saves 119 ms/call (38%), payback after ~4 calls.** The claim is right. | High — measured |
-| 5 | Hop limit | **Unimplementable as designed.** Direct peer calls mean the gateway never sees the chain. | High — reproduced |
-| 6 | Should agents reach the gateway? | **They currently can reach anything on `internal`.** "No" is a policy with no enforcement. | High — reproduced |
+| 5 | Hop limit | **DECIDED — implementable.** All traffic routes through the gateway, so the counter has something to count. | Decided |
+| 6 | Agents and the gateway | **DECIDED — yes, by design.** The gateway is the only agent-to-agent route. | Decided |
 | 7 | Auth | The primitive **already exists** and was verified in Phase 0. | High — prior evidence |
 
 ---
@@ -178,6 +178,75 @@ even a warm pool and it is exactly the isolation this project exists to provide.
 justification for the whole design, so it should never be quietly taken.
 
 ---
+
+---
+
+## DECISION (2026-09-30) — Config 2: all traffic goes through the gateway
+
+**Agents must not talk directly to each other. Every client call and every agent-to-agent call is
+mediated by the gateway.**
+
+This supersedes the recommendation below, which was Config 3 on the grounds that a depth *bound* was
+enough. That reasoning was wrong, and the measurements already contained the correction.
+
+```
+┌─ client-facing ─────────────────────────────────────────────────────────┐
+│                                                                            │
+│   clients ──────▶ ┌────────────────────────────────────────────┐            │
+│                   │ GATEWAY                                     │            │
+│                   │  · holds the docker socket (spawns only)    │            │
+│                   │  · STATIC tool manifest                     │            │
+│                   │  · hop counter  ← only possible here       │            │
+│                   │  · concurrency cap ← covers every spawn    │            │
+│                   │  · call origin + depth, propagated          │            │
+│                   └───┬─────────────────────────┬───────────────┘            │
+└───────────────────────┼─────────────────────────┼─────────────────────────┘
+                        │ spawns                 │ every A↔B call routes here
+┌─ internal (true) ─────┼─────────────────────────┼─────────────────────────┐
+│                        ▼                         ▼                         │
+│                  ┌────────────┐           ┌────────────┐                   │
+│                  │  agent A   │──────────▶│  agent B   │  via the gateway   │
+│                  └────────────┘           └────────────┘                   │
+│                                                                            │
+│   agent A ──✗──▶ agent B     NO direct peer path exists on this network     │
+│                                                                            │
+│   agent A ──▶ gateway  ✓ BY DESIGN — it is the only agent-to-agent route  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why this is stronger than direct peer calls
+
+It is not a preference between equals. Three of the properties that made direct peer calls unsafe
+become **impossible rather than merely bounded**:
+
+1. **The hop limit becomes implementable.** Q5's finding was that *no* gateway-side hop limit can exist
+   if agents call each other directly — the call never passes through the gateway, so it can count the
+   calls it is asked for but not the ones its containers make to each other. Routing everything through
+   one chokepoint is the only shape where the counter has anything to count.
+2. **Compromise containment.** With direct calls, a prompt-injected agent can hammer a peer's
+   container with no mediation at all. Through the gateway, every A→B call is visible and can be
+   rate-limited, depth-checked, and attributed.
+3. **The concurrency cap now covers every spawn.** The gateway is the only component that creates
+   containers *and* the only route by which anything reaches it. Under direct peer calls those were two
+   separate paths, and only one was governed.
+
+### The cost, stated plainly
+
+- **Agents reach the component holding the Docker socket.** Bounded by the cap and the hop limit, but
+  it is a real capability and the design should say so out loud rather than discover it later.
+- **The gateway is a single point of failure and a throughput bottleneck.** Every call in the system
+  crosses it.
+- **The audit-trail claim is only as good as the propagation.** The gateway must carry call origin and
+  depth on every request, or "we can tell who called what" is hollow.
+
+### What this settles
+
+- **Q5** — hop limit: now implementable, because the gateway observes every call.
+- **Q6** — agents and the gateway: the answer inverts from "must not" to **must**, since it is the
+  only agent-to-agent route. The gateway is reachable from `internal` deliberately.
+
+No peer-to-peer route is opened on the network. A prompt-injected agent reaching a peer goes through
+the same door a client does, which is what makes the hop counter and the cap mean anything.
 
 ## The topologies, drawn
 
@@ -352,12 +421,22 @@ The plugin currently has **one agent**, so nothing needs peer calls today. Build
 capability nothing uses would be speculative complexity of the kind that has caused most of the
 rework so far.
 
-**Recommendation: Config 3**, on the grounds that a bound is sufficient and Config 3 is the cheapest
-way to keep delegation while enforcing the security property that actually matters.
+**Original recommendation was Config 3**, on the grounds that a depth bound was sufficient and Config 3
+was the cheapest way to keep delegation.
+
+**That was wrong.** Config 2 is stronger, because it converts the properties that direct peer calls
+merely *bounded* into properties that are simply *impossible*. See the decision record above. The
+measurement that corrected it — peer calls do not spawn, but the gateway does — was in this document the
+whole time.
 
 ---
 
-## Q5 — Hop limit: not implementable as designed
+## Q5 — Hop limit: was unimplementable, now is
+
+> **Superseded by the decision above.** The finding below still stands — a gateway-side hop limit
+> cannot exist when agents call peers directly. The decision routes everything through the gateway, so
+> the counter finally has something to count. Kept because the reasoning is what justifies the
+> decision.
 
 **Answer: the hop limit and the "agents call peers directly" design are mutually exclusive.**
 
@@ -392,7 +471,11 @@ the caveat that the third is a decision to stop defending, not a decision to be 
 
 ---
 
-## Q6 — Should agents reach the gateway? It is not enforceable today
+## Q6 — Agents and the gateway
+
+> **Superseded by the decision above.** The answer inverts: agents *must* reach the gateway, because it
+> is the only agent-to-agent route. The measurements below are what established that the current
+> topology is a flat mesh — which is the thing being replaced.
 
 **Answer: they can, and "no" is currently a policy with no mechanism behind it.**
 
@@ -446,6 +529,14 @@ attribute a call in its logs. If either matters, tokens must be issued and mappe
 is a real design surface rather than a config flag.
 
 ---
+
+## The one question the decision makes sharper
+
+Q7 asked whether the gateway needs **per-caller identity**, and the answer is now a stronger yes. With
+every call in the system crossing one chokepoint, the gateway already knows the origin of each call —
+so the audit trail, the concurrency cap, and the hop counter are all waiting on the same piece of
+state. Carrying call origin and depth on every request makes all three work. Dropping it makes all
+three hollow, and it is the easiest thing in this design to skip.
 
 ## What should be decided before writing gateway code
 
