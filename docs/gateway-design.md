@@ -4,6 +4,15 @@ Every agent is a tool. The gateway exposes the agents, starts the right
 container when a tool is called, and passes the prompt through. That is the
 whole of it.
 
+**The gateway is optional and nothing below is a dependency of the tool.** An
+image is usable on its own with `docker run --rm <image> mcp`, and every shipped
+client config is generated as stdio for exactly that reason: a client that spawns
+the container itself needs no service, no port, and no gateway. This document
+describes what the gateway does *if* you run one — either as an MCP proxy or as
+dynamic container instantiation. `scripts/check-direct-use.sh` verifies the
+gateway-free path, and `scripts/test.sh` runs it, because that claim was true for
+several turns while nothing tested it.
+
 ```
    client model
         |  MCP: tools/list -> [dev, ...]

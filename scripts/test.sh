@@ -18,6 +18,19 @@ no()   { printf '  \033[31m✗\033[0m %s\n' "$*"; fail=$((fail+1)); }
 sk()   { printf '  \033[33m–\033[0m %s\n' "$*"; skip=$((skip+1)); }
 head_() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# ------------------------------------------------- independent use (no gateway)
+head_ "independent use"
+# The claim the architecture rests on: an image is the product, so
+# `docker run --rm <image> mcp` works with nothing else running. This was
+# verified by hand for several turns and by nothing automatic, which is how
+# mcp.json came to point at a gateway that was never in compose with every test
+# green. RUN_JULES=1 opts the Jules half in; nothing inspects the credential.
+if ./scripts/check-direct-use.sh; then
+  ok "images are usable directly, with no gateway"
+else
+  no "an image is not usable directly"
+fi
+
 # ---------------------------------------------------------------- jules image
 head_ "jules"
 # The finished-or-parked verdict. Stdlib-only, so it runs here rather than needing
