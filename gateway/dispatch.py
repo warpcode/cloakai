@@ -229,8 +229,15 @@ def call_agent(
     if not isinstance(prompt, str) or not prompt.strip():
         raise GatewayError("'prompt' is required and must be a non-empty string")
 
+    # Validate agent presence before minting keys to fail fast securely on unknown agents
+    # and avoid unhandled KeyError or wasteful API proxy key generation.
+    spec = agents(manifest).get(agent_name)
+    if spec is None:
+        known = ", ".join(sorted(agents(manifest))) or "none"
+        raise GatewayError(f"unknown agent '{agent_name}'; the gateway offers: {known}")
+
     key = mint_key()
-    if key is None and (agents(manifest)[agent_name].get("env") or {}):
+    if key is None and (spec.get("env") or {}):
         return (f"[{agent_name}] the model proxy did not answer, so no key could be "
                 "minted and this agent has no model endpoint. Is the stack up? "
                 "docker compose -f infra/compose.yml up -d")
