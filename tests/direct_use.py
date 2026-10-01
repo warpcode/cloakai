@@ -13,14 +13,12 @@ MCP to it over stdio, and never imports gateway code. If this passes, the image 
 independently reusable and nothing about the tool surface depends on cloakai
 being in the middle.
 
-Run inside the gateway image, purely because it already has an MCP client
-installed. It is used here as a test harness, not as the gateway.
+Run inside the probe image, which exists only to provide an MCP client:
 
     docker run --rm --entrypoint python \
       -v /var/run/docker.sock:/var/run/docker.sock \
-      -v "$PWD/gateway:/srv/gateway:ro" \
       -e CLOAKAI_NETWORK=cloakai-internal \
-      cloakai/gateway:latest python -m gateway.tests.direct_use
+      cloakai/probe:latest -m tests.direct_use
 """
 
 from __future__ import annotations

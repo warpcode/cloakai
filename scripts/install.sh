@@ -95,5 +95,7 @@ if wants claude-code; then
 fi
 
 echo
-echo "done. The MCP endpoint is a gateway that does not exist yet, so tools will not"
-echo "resolve until Phase 2/3. That is expected in this phase — see docs/verification/phase-0.md."
+echo "done. The MCP entry is stdio — the client spawns the container itself — so"
+echo "tools resolve without any service running. You need the image built (./scripts/build.sh)"
+echo "and OPENAI_API_KEY in your environment. See the 'Using an image directly' section"
+echo "of README.md."

@@ -42,7 +42,7 @@ case "$mode" in
     #
     # --insecure-no-auth because the bind is 0.0.0.0 and there is no auth; that
     # is acceptable only while the container is attached to cloakai-internal and
-    # no port is published. See docs/gateway-design.md.
+    # no port is published. See the "Using an image directly" section of README.md.
     exec docker-agent serve mcp /agent/agent.yaml \
       -a dev \
       --http --listen 0.0.0.0:8081 \

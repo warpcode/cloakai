@@ -4,7 +4,7 @@
 # Two layers:
 #   - Compiler unit tests and a determinism check, which must always pass.
 #   - Client conformance, which is reported separately because the MCP endpoint
-#     cannot resolve until the gateway exists.
+#     cannot resolve if the image is not built.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,15 +18,15 @@ no()   { printf '  \033[31m✗\033[0m %s\n' "$*"; fail=$((fail+1)); }
 sk()   { printf '  \033[33m–\033[0m %s\n' "$*"; skip=$((skip+1)); }
 head_() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
-# ------------------------------------------------- independent use (no gateway)
+# ---------------------------------------------------- independent use, directly
 head_ "independent use"
 # The claim the architecture rests on: an image is the product, so
 # `docker run --rm <image> mcp` works with nothing else running. This was
 # verified by hand for several turns and by nothing automatic, which is how
-# mcp.json came to point at a gateway that was never in compose with every test
+# mcp.json came to point at a service that was never in compose with every test
 # green. RUN_JULES=1 opts the Jules half in; nothing inspects the credential.
 if ./scripts/check-direct-use.sh; then
-  ok "images are usable directly, with no gateway"
+  ok "images are usable directly"
 else
   no "an image is not usable directly"
 fi
@@ -41,18 +41,6 @@ if python3 -m unittest discover -s agents/jules-mcp -p "test_*.py" -t . 2>&1 | t
 else
   no "verdict unit tests"
   python3 -m unittest discover -s agents/jules-mcp -p "test_*.py" -t . 2>&1 | tail -20
-fi
-
-# ---------------------------------------------------------------- gateway
-head_ "gateway"
-# Pure tests: the dispatcher builds a docker command line, and a mock must never
-# assert the command line the manifest actually produces. They also run against
-# dist/gateway.json so the committed manifest cannot drift from the code.
-if python3 -m unittest discover -s gateway/tests -t . 2>&1 | tail -3 | grep -q "^OK"; then
-  ok "dispatcher unit tests"
-else
-  no "dispatcher unit tests"
-  python3 -m unittest discover -s gateway/tests -t . 2>&1 | tail -20
 fi
 
 # ---------------------------------------------------------------- compiler
@@ -84,9 +72,10 @@ else
 fi
 
 # ---------------------------------------------------------------- reaper
-# The leak guard for per-call containers. Only meaningful once a gateway exists,
-# but the reaper is standalone and testable now, and a leak guard that is written
-# and verified later is a leak guard that does not exist.
+# The leak guard for per-call containers. Nothing creates cloakai.call=1 containers
+# any more — the gateway that did is gone — so this currently has nothing to reap.
+# It is kept and tested because it is standalone, and a leak guard written and
+# verified later is a leak guard that does not exist.
 head_ "per-call container reaper"
 if [ "${SKIP_ISOLATION:-0}" = "1" ] || ! command -v docker >/dev/null 2>&1; then
   sk "docker not available"

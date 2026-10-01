@@ -11,7 +11,7 @@ Run as:
       docker run --rm --entrypoint python \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -e JULES_API_KEY \
-        cloakai/gateway:latest /srv/jules-mcp/probe.py
+        cloakai/probe:latest /srv/jules-mcp/probe.py
 """
 
 from __future__ import annotations

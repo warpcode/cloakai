@@ -90,7 +90,8 @@ cmd_up() {
   status || true
   echo
   echo "${green}ready.${off} the agent is reachable on the internal network${off} as 'dev-agent'."
-  echo "${dim}Nothing calls it automatically yet — there is no gateway. This is plumbing.${off}"
+  echo "${dim}This service is for poking at things by hand. Clients normally spawn the${off}"
+  echo "${dim}container directly over stdio and need no service at all — see README.${off}"
   echo
   echo "  agent   ${COMPOSE[*]} exec dev-agent <cmd>"
   echo "  logs    ./scripts/dev.sh logs"

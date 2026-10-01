@@ -32,8 +32,8 @@ docker compose -f infra/compose.yml up -d       # the proxy and its credential s
 
 ## Using an image directly
 
-An image is the product. The gateway is optional and nothing in an image refers to
-it, so every agent is usable with nothing else running:
+An image is the product. There is no gateway and nothing in an image refers to one,
+so every agent is usable with nothing else running:
 
 ```bash
 # the dev agent, as an MCP server over stdio
@@ -103,13 +103,13 @@ marker in the timeline settles it.
 ### Checking it still holds
 
 ```bash
-./scripts/check-direct-use.sh    # both images, over stdio, with no gateway
+./scripts/check-direct-use.sh    # both images, over stdio, with nothing else running
 ```
 
 `scripts/test.sh` runs it. It caught nothing at first, and that is the point — the
 claim was verified by hand for several turns and by nothing automatic, which is
-how `mcp.json` came to point at a gateway service that was never in compose while
-every test stayed green.
+how `mcp.json` came to point at a service that was never in compose while every
+test stayed green.
 
 `./scripts/compile.sh` and `./scripts/install.sh` need no Docker at all. A plugin is a
 directory, so you can install it and use the agent on your workstation with nothing else running.
@@ -155,7 +155,7 @@ than assumed — `scripts/isolation-tests.sh` test 5c mounts a workspace deliber
 sharing appears, so test 5 is not passing for an unrelated reason.
 
 The `dev-agent` compose service opts in by default, because `dev.sh shell` exists to poke at your
-project interactively. The gateway's per-call containers do not.
+project interactively. A spawned agent container gets no workspace unless it asks.
 
 ## How this fits together
 
@@ -192,24 +192,36 @@ internet by being on `egress`, and only `litellm` is. To give the agent a new ca
 fetch, say — add a container on `internal` *and* `egress` that serves exactly that tool. Do not add a
 second network; adding a container to the existing two is the entire extension mechanism.
 
-The gateway — one endpoint that spawns a fresh container per call — is **not built yet.** Its seven
-design questions were [answered by measurement](docs/gateway-verification.md), which produced a
-[decision](docs/gateway-verification.md#decision-2026-09-30--config-2-all-traffic-goes-through-the-gateway):
-**agents never talk directly to each other; all traffic is mediated by the gateway.** That is what
-makes the hop limit enforceable at all. The [design](docs/gateway-design.md) rests on one measured
-property — the gateway binds a separate listener per interface address, so a client cannot open the
-agent listener and vice versa, and call provenance comes from the kernel rather than a forgeable
-header.
+### There is no gateway, and that is the design
+
+A gateway was built and then removed. It worked — an MCP server that spawned a fresh container per
+call — but it turned out to be unnecessary, because an image already speaks MCP over stdio and any
+client can spawn it directly:
+
+```bash
+docker run --rm -i --network cloakai-internal -e OPENAI_API_KEY cloakai/dev:latest mcp
+```
+
+That removes the reason the gateway existed: there is nothing left for it to mediate. Its measured
+[design work](docs/gateway-verification.md) is kept for the record — hop limits, two-listener
+provenance — but nothing in the system depends on any of it, and `docs/gateway-design.md` was
+deleted with the code.
+
+Isolation does not rest on the gateway either. It rests on the container flags in
+`agents/isolation-flags`: read-only rootfs, dropped capabilities, four tmpfs mounts, and no Docker
+socket, so an agent cannot start a sibling. An agent image has no way to reach another agent even
+if one wanted to.
 
 ### What is not automatic yet
 
-**Nothing calls these containers.** There is no gateway, no per-call container spawning, no
-scheduler, no queue. `dev-agent` runs because you asked for it, and you call it by hand. The next
-phase ([#15](https://github.com/warpcode/cloakai/issues/15) is done, [#17](https://github.com/warpcode/cloakai/issues/17)
-is the gateway) is what makes anything drive it.
+**No scheduler, no queue, no concurrency cap.** Nothing coordinates how many containers run at once.
+`scripts/cloakai-reap.py` exists to reap a per-call container that outlived its call, but nothing
+currently creates `cloakai.call=1` containers, so it has nothing to reap — it is orphaned machinery
+kept in case per-call spawning returns.
 
-Treat this phase as plumbing, not automation. What it does buy you: the isolation flags live in one
-versioned file instead of someone's shell history, and the container survives `docker compose up`.
+What this phase does buy you: the isolation flags live in one versioned file instead of someone's
+shell history, every client gets its tools from a generated stdio entry, and both images are usable
+with no service running.
 
 ### The dev stack
 
@@ -304,10 +316,18 @@ non-zero on all of it. A plugin that refuses to build is better than one that ha
 
 ## Status
 
-Phases 0–2 are done: verification, the plugin compiler, and an isolated container runtime with a
-proxy in front of it. Phase 3 (Compose integration and a stable gateway address) is next, so the
-MCP endpoint in the generated plugins points at a hostname the gateway does not serve yet —
-`tools/list` against the generated config will not resolve until then.
+Phases 0–3 are done, and the gateway planned for the end of it was built and then removed once it
+turned out to be unnecessary — every client spawns the container over stdio instead. What works
+now:
+
+- Two agent images, `cloakai/dev` and `cloakai/jules`, each usable with nothing else running.
+- Generated stdio entries for opencode, agy, Claude Code, VS Code and OpenHands, in each client's
+  own shape.
+- Isolation asserted by `scripts/isolation-tests.sh`, including that a default invocation mounts no
+  working directory at all.
+- A model proxy that is the only container able to reach the internet.
+
+Not done: concurrency limiting, and a second agent that is not Jules or `dev`.
 
 `./scripts/test.sh` runs three layers: compiler correctness and determinism (fast, no Docker),
 container isolation (needs the image and the network), and **client conformance** — a real,

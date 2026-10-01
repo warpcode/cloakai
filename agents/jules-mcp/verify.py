@@ -10,9 +10,9 @@ Run as:
     JULES_API_KEY=$(cloakenv get "kp://Personal/Credentials/Google - Main - Jules - Api Key:Password") \
       docker run --rm --entrypoint python \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        -v "$PWD/agents:/srv/agents:ro" \
+        -v "$PWD/agents/jules-mcp:/srv/jules-mcp:ro" \
         -e JULES_API_KEY \
-        cloakai/gateway:latest /srv/agents/jules-mcp/verify.py
+        cloakai/probe:latest /srv/jules-mcp/verify.py
 """
 
 from __future__ import annotations

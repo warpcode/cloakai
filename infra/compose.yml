@@ -141,8 +141,8 @@ services:
     # A workspace is OPT-IN, and it is opted into HERE, deliberately, for one
     # reason: `dev.sh shell` is for poking at your own project interactively.
     #
-    # This service is the interactive one. The gateway's per-call containers do
-    # NOT mount a workspace unless the call asks for one — that is the difference
+    # This service is the interactive one. A client that spawns the container
+    # itself gets NO workspace unless it asks for one — that is the difference
     # between dev and execution, and isolation test 5b asserts it.
     #
     # Set AGENT_PROJECT= (empty) to run this service with no workspace at all.
@@ -167,7 +167,7 @@ services:
     cpus: 2.0
     networks: [internal]
     # NO published ports, deliberately. The container is reachable by DNS name on
-    # `internal` only, which is where the gateway will find it. Publishing it
+    # `internal` only, which is where a spawned agent container will find it. Publishing it
     # would expose an isolated agent to the host for no gain — and a published
     # port on a network shared with an untrusted agent is a hole in the design.
     #

@@ -20,12 +20,18 @@
 #
 # Prefer running the jules half through agents/jules-mcp/verify.py directly; it
 # needs the Docker socket and a key in the same invocation.
+#
+# The jules half here builds the probe image's dependency set by reusing it as an
+# MCP client, so RUN_JULES=1 also requires the key in THIS environment.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-HARNESS="${HARNESS:-cloakai/gateway:latest}"
+# A test-only MCP client. Not part of the product: the product is the agent
+# images. This used to be the gateway's image, and the gateway is gone; the ability
+# to prove it is unnecessary had to outlive it.
+HARNESS="${HARNESS:-cloakai/probe:latest}"
 NETWORK="${CLOAKAI_NETWORK:-cloakai-internal}"
 pass=0
 fail=0
@@ -36,7 +42,7 @@ no()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fail=$((fail + 1)); }
 docker image inspect "$HARNESS" >/dev/null 2>&1 || {
   echo "  the harness image $HARNESS is missing." >&2
   echo "  It is only an MCP client here, not part of the product:" >&2
-  echo "    docker build -f gateway/Dockerfile -t $HARNESS ." >&2
+  echo "    docker build -f tests/probe.Dockerfile -t $HARNESS ." >&2
   fail=$((fail + 1))
   echo; echo "  $pass passed, $fail failed"; exit 1
 }
@@ -47,7 +53,7 @@ out=$(timeout 300 docker run --rm --entrypoint python \
         -v /var/run/docker.sock:/var/run/docker.sock \
         -v "$ROOT/gateway:/srv/gateway:ro" \
         -e CLOAKAI_NETWORK="$NETWORK" \
-        "$HARNESS" -m gateway.tests.direct_use 2>&1)
+        "$HARNESS" -m tests.direct_use 2>&1)
 
 if grep -q "PASS: the image is a working MCP server" <<<"$out"; then
   ok "cloakai/dev:mcp speaks MCP with no gateway"
