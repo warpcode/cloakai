@@ -107,7 +107,9 @@ PY
 
 check_keys "$DIST/google.antigravity/plugin.json" '$schema' name description
 
-# opencode: key is mcp, every entry is type remote, and "sse" appears nowhere.
+# opencode: key is mcp, every entry is type local with `command` as one argv
+# array, and "sse" appears nowhere. That shape is what `opencode mcp add` itself
+# wrote, not what the plugin schema says — opencode is the consumer.
 # Inspects all servers rather than one hardcoded name, so renaming a server or
 # adding a second one cannot make this assertion silently vacuous.
 if [ -f clients/opencode.json ]; then
@@ -119,13 +121,16 @@ assert servers is not None, 'no mcp key'
 assert 'mcpServers' not in d, 'uses mcpServers instead of mcp'
 assert servers, 'mcp key is empty; this assertion would be vacuous'
 for name, e in servers.items():
-    assert e.get('type') == 'remote', f'{name}: type is {e.get(\"type\")!r}, expected remote'
-    assert e.get('url'), f'{name}: no url'
+    assert e.get('type') == 'local', f'{name}: type is {e.get(\"type\")!r}, expected local'
+    cmd = e.get('command')
+    assert isinstance(cmd, list), f'{name}: command must be an array, got {type(cmd).__name__}'
+    assert cmd[:2] == ['docker', 'run'], f'{name}: command is not a docker argv: {cmd!r}'
     assert e.get('enabled') is True, f'{name}: not enabled'
+    assert 'url' not in e, f'{name}: a stdio server carries no url'
 assert 'sse' not in json.dumps(d), 'emits an sse type'
 print(f'{len(servers)} server(s): ' + ', '.join(sorted(servers)))
 " 2>&1)
-  if [ $? -eq 0 ]; then ok "clients/opencode.json uses mcp + type remote, no sse ($out)"
+  if [ $? -eq 0 ]; then ok "clients/opencode.json uses mcp + type local (docker argv), no sse ($out)"
   else no "clients/opencode.json shape is wrong: $out"; fi
 fi
 

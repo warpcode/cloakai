@@ -42,13 +42,17 @@ class Context:
         servers = {}
         for name, entry in sorted(self.mcp.get("mcpServers", {}).items()):
             if entry.get("type") == "stdio":
-                out = {"type": "stdio", "command": entry["command"]}
+                # agy writes a stdio server as command + args + disabled, with no
+                # `type` at all. Taken from what `agy mcp add` actually produced
+                # rather than from the plugin schema, because agy is the consumer.
+                out = {"command": entry["command"]}
                 if entry.get("args"):
                     out["args"] = list(entry["args"])
                 if entry.get("env"):
                     out["env"] = dict(entry["env"])
                 if entry.get("cwd"):
                     out["cwd"] = entry["cwd"]
+                out["disabled"] = False
             else:
                 # agy uses serverUrl and does not recognise url or httpUrl.
                 out = {"type": entry.get("type", "streamable-http"), url_field: entry.get("url")}

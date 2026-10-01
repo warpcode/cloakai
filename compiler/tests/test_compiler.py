@@ -177,12 +177,39 @@ class TestBuild(Sandbox):
                           f"entrypoint {mode!r} in agent.json does not appear in "
                           f"agents/cloakai-entrypoint.sh; one of them is stale")
 
-    def test_agy_mcp_uses_serverurl_only(self):
+    def test_agy_mcp_uses_the_shape_agy_itself_writes(self):
+        """agy stdio servers are command + args + disabled, with no `type`.
+
+        The shape here came from running `agy mcp add cloakai-probe -- docker run
+        ...` and reading back what it wrote, because agy is the consumer and the
+        plugin schema is not its schema.
+        """
         self.compile()
-        text = (self.cwd / "dist/dev/google.antigravity/mcp_config.json").read_text()
-        self.assertIn('"serverUrl"', text)
-        self.assertNotIn('"url"', text)
-        self.assertNotIn('"httpUrl"', text)
+        doc = json.loads(
+            (self.cwd / "dist/dev/google.antigravity/mcp_config.json").read_text()
+        )
+        entry = doc["mcpServers"]["agents"]
+        self.assertEqual(entry["command"], "docker")
+        self.assertEqual(entry["args"][0], "run")
+        self.assertIn("mcp", entry["args"])
+        self.assertFalse(entry["disabled"])
+        self.assertNotIn("type", entry, "agy wrote no type for a stdio server")
+        self.assertNotIn("serverUrl", entry, "a stdio server has no URL")
+
+    def test_no_generated_config_points_at_a_service_that_does_not_exist(self):
+        """The whole point of stdio: nothing to be running first.
+
+        A config that named a host:port passed every test here while pointing at a
+        gateway service that was never in compose. Assert the absence, because
+        that is the property that rots silently.
+        """
+        self.compile()
+        for relative in ("dist/dev/mcp.json",
+                         "dist/dev/google.antigravity/mcp_config.json",
+                         "clients/opencode.json"):
+            text = (self.cwd / relative).read_text()
+            self.assertNotIn("cloakai-gateway", text, f"{relative} names a dead service")
+            self.assertNotIn("4483", text, f"{relative} names a port nothing listens on")
 
     def test_opencode_config_shape(self):
         self.compile()
@@ -190,9 +217,13 @@ class TestBuild(Sandbox):
         self.assertIn("mcp", doc)
         self.assertNotIn("mcpServers", doc, "opencode uses the mcp key, not mcpServers")
         entry = doc["mcp"]["agents"]
-        self.assertEqual(entry["type"], "remote")
+        # opencode's `mcp add` writes type local and `command` as one ARRAY.
+        self.assertEqual(entry["type"], "local")
         self.assertNotEqual(entry["type"], "sse", "there is no sse type in opencode")
         self.assertTrue(entry["enabled"])
+        self.assertEqual(entry["command"][:3], ["docker", "run", "--rm"])
+        self.assertEqual(entry["command"][-1], "mcp")
+        self.assertNotIn("url", entry)
 
     def test_no_absolute_host_paths(self):
         self.compile()

@@ -2,10 +2,20 @@
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "agents": {
-      "type": "remote",
-      "url": "http://dev-agent:8081/mcp",
-      "enabled": true,
-      "oauth": false
+      "type": "local",
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "cloakai-internal",
+        "-e",
+        "OPENAI_API_KEY",
+        "cloakai/dev:latest",
+        "mcp"
+      ],
+      "enabled": true
     }
   },
   "agent": {

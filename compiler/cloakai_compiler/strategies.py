@@ -105,7 +105,17 @@ def config_opencode(ctx) -> list[Path]:
     """
     servers = {}
     for name, entry in sorted(ctx.mcp.get("mcpServers", {}).items()):
-        cfg = {"type": "remote", "url": entry.get("url"), "enabled": True, "oauth": False}
+        if entry.get("type") == "stdio":
+            # opencode's own `mcp add` writes type local and a single `command`
+            # ARRAY, not a command string plus args. Taken from what opencode
+            # wrote, not from the plugin schema.
+            cfg = {
+                "type": "local",
+                "command": [entry["command"], *entry.get("args", [])],
+                "enabled": True,
+            }
+        else:
+            cfg = {"type": "remote", "url": entry.get("url"), "enabled": True, "oauth": False}
         if entry.get("headers"):
             cfg["headers"] = dict(entry["headers"])
         servers[name] = cfg
