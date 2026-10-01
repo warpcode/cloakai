@@ -202,11 +202,18 @@ class DestructionClaim(unittest.TestCase):
     def test_agents_is_rm_so_destruction_cannot_be_skipped(self):
         self.assertIn("--rm", argv("agents"))
 
-    def test_mcp_is_not_rm_because_the_pipe_keeps_it_alive(self):
-        # Not an oversight: `--rm` with `-i` is fine, but the container must
-        # outlive this docker invocation until stdin closes. The e2e test asserts
-        # it is gone once the client disconnects.
-        self.assertNotIn("--rm", argv("mcp"))
+    def test_mcp_is_rm_too(self):
+        """--rm on both shapes, and the mcp one matters most.
+
+        It does not shorten the container's life: with -i and an exec'd docker the
+        container lives until stdin closes, and --rm only removes it on exit.
+
+        Omitting it from mcp leaked containers. That is the shape most likely to be
+        killed mid-call — a test timeout, a Ctrl-C, a dropped client — and those
+        are exactly the exits that leak. Three orphaned `cloakai-entrypoint mcp`
+        containers sat on the host for two days because of this.
+        """
+        self.assertIn("--rm", argv("mcp"))
 
     def test_both_shapes_are_interactive(self):
         for shape in ("agents", "mcp"):

@@ -7,6 +7,18 @@
 #     cannot resolve if the image is not built.
 set -uo pipefail
 
+# The suite starts MCP containers whose entire purpose is to wait for stdin. If it
+# is interrupted or a check fails, they must not survive the run.
+cleanup() {
+  local ids
+  ids=$(docker ps -aq --filter "label=cloakai.call=1" 2>/dev/null || true)
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086
+    docker rm -f $ids >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 PLUGIN="${PLUGIN:-dev}"

@@ -50,3 +50,23 @@ The Dockerfile copies `dist/dev`, not `plugins/dev`. That way the image and a lo
 plugin are guaranteed to be the same thing, because both come from the compiler.
 
 `ARG PLUGIN` selects a different tree if you build one: `PLUGIN=other ./scripts/build.sh`.
+
+## Cleaning up after a run
+
+MCP containers exist to sit and wait for stdin, so they leak if the thing that
+spawned them dies first. Both harnesses now clean up unconditionally — on success,
+on failure, and on interrupt:
+
+```bash
+# nothing from a run should outlive it
+docker ps -a --filter "label=cloakai.call=1"
+
+# remove anything left over from an interrupted run
+docker ps -aq --filter "label=cloakai.call=1" | xargs -r docker rm -f
+```
+
+Every call container is labelled `cloakai.call=1`, so that filter is precise and
+cannot catch anything that is not ours.
+
+Both CLI shapes pass `--rm`, so a normal exit needs no cleanup at all. The label
+filter is for the abnormal exits: a Ctrl-C, a test timeout, a dropped client.

@@ -33,6 +33,28 @@ from mcp.client.stdio import stdio_client
 IMAGE = os.environ.get("AGENT_IMAGE", "cloakai/dev:latest")
 
 
+def _cleanup() -> None:
+    """Remove any container this harness left behind.
+
+    Best-effort and unconditional. A harness that is interrupted, times out, or
+    fails an assertion partway through still has containers running, and orphaned
+    MCP containers are exactly what this file's own --rm assertion exists to
+    prevent. Better to remove a container that might still be wanted than to
+    leave one that never will be.
+    """
+    subprocess.run(
+        ["docker", "ps", "-q", "--filter", "label=cloakai.call=1"],
+        capture_output=True, text=True, check=False,
+    )
+    listed = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", "label=cloakai.call=1"],
+        capture_output=True, text=True, check=False,
+    )
+    for cid in (listed.stdout or "").split():
+        subprocess.run(["docker", "rm", "-f", cid],
+                       capture_output=True, check=False)
+
+
 async def main() -> int:
     # This is the whole interface. No gateway, no manifest, no proxy hop of ours.
     command = "docker"

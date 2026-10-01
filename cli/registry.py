@@ -253,13 +253,17 @@ def build_argv(
     call_id = call_id or uuid.uuid4().hex[:12]
     started = int(time.time()) if started is None else started
 
-    argv = ["docker", "run"]
-    # -i keeps stdin open, which the mcp shape needs to stay alive at all. The
-    # agents shape reads nothing from stdin so it does not ask for it.
+    # --rm on BOTH shapes. It does not shorten the container's life: with `-i`
+    # and an exec'd docker, the container lives until stdin closes, and --rm only
+    # removes it on exit. Omitting it from the mcp shape was a mistake — it is the
+    # long-lived shape, so it is the one MOST likely to be killed mid-call (a test
+    # timeout, a Ctrl-C, a dropped client), and those are exactly the exits that
+    # leaked containers. Three orphaned `cloakai-entrypoint mcp` containers sat on
+    # this host for two days because of it.
+    argv = ["docker", "run", "--rm"]
+    # -i keeps stdin open, which the mcp shape needs to stay alive at all.
     if interactive:
         argv.append("-i")
-    if shape == "agents":
-        argv.append("--rm")
     argv += [
         "--name", f"cloakai-{shape}-{call_id}",
         "--label", "cloakai.call=1",

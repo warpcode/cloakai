@@ -25,6 +25,20 @@
 # MCP client, so RUN_JULES=1 also requires the key in THIS environment.
 set -uo pipefail
 
+# Anything this script starts goes away when it finishes, INCLUDING when it is
+# interrupted or a check fails partway. Without this, a failed run left MCP
+# containers running indefinitely, because the mcp shape's whole job is to sit
+# there waiting for stdin.
+cleanup() {
+  local ids
+  ids=$(docker ps -aq --filter "label=cloakai.call=1" 2>/dev/null || true)
+  if [ -n "$ids" ]; then
+    # shellcheck disable=SC2086
+    docker rm -f $ids >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
