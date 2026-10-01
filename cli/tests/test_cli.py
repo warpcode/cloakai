@@ -60,13 +60,52 @@ class ShapeMapping(unittest.TestCase):
     """The bug this class exists for: `agents` looking for an entrypoint named
     `agents`, which does not exist, so every invocation failed."""
 
-    def test_agents_shape_uses_the_run_entrypoint(self):
-        self.assertEqual(argv("agents")[-2:], ["run", "do the thing"])
+    def test_agents_shape_runs_the_command_the_agent_declares(self):
+        """The bug that made `cloakai prompt` hang forever with no output.
+
+        The CLI passed the entrypoint KEY ("run") rather than the command
+        agent.json declares, so the entrypoint fell back to a hardcoded
+        `opencode run --auto` with no --model. That does not error: opencode
+        waits on a model it was never given. The command has to be passed whole,
+        because every flag in it is load-bearing.
+        """
+        spec = json.loads(json.dumps(SPEC))
+        spec["entrypoints"]["run"] = "opencode run --model opencode/big-pickle --auto"
+        line = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="hi")
+        # The image, then the mode, then the declared command, then the prompt.
+        # Indexed rather than sliced so an extra token cannot shift the window and
+        # make a wrong argv look right.
+        image_at = line.index(spec["image"])
+        self.assertEqual(
+            line[image_at:],
+            ["cloakai/dev:latest", "run-cmd", "opencode", "run",
+             "--model", "opencode/big-pickle", "--auto", "hi"],
+            f"the declared command must survive to argv; got {line[image_at:]}",
+        )
+        self.assertEqual(line[-1], "hi", "the prompt is still last")
+        self.assertIn("--model", line, "--model must reach the container")
+        self.assertIn("--auto", line)
+
+    def test_agents_dispatches_run_cmd_never_run(self):
+        # `run` is the SHAPE name and reaches no case arm in the entrypoint: it
+        # printed the usage banner and exited in 0.06s. The bare word also appears
+        # in `docker run` and in `opencode run`, so this asserts on the token
+        # AFTER the image — the only position where it would be a mode name.
+        line = argv("agents")
+        self.assertIn("run-cmd", line)
+        image_at = line.index(SPEC["image"])
+        self.assertEqual(line[image_at + 1], "run-cmd",
+                         f"the mode after the image must be run-cmd: {line}")
+
+    def test_mcp_uses_the_mode_name(self):
+        self.assertEqual(argv("mcp")[-1], "mcp")
 
     def test_mcp_shape_uses_the_mcp_entrypoint(self):
         self.assertEqual(argv("mcp")[-1], "mcp")
 
+
     def test_shapes_map_to_the_documented_entrypoints(self):
+        # The catalogue key an agent declares under, not the argv mode.
         self.assertEqual(reg.SHAPES["agents"], "run")
         self.assertEqual(reg.SHAPES["mcp"], "mcp")
 
@@ -74,12 +113,12 @@ class ShapeMapping(unittest.TestCase):
         with self.assertRaises(reg.CliError):
             reg.build_argv(ONE, "dev", "sideways")
 
-    def test_agent_missing_the_entrypoint_says_which_it_has(self):
+    def test_agent_missing_the_command_says_which_it_has(self):
         thin = {"agents": {"dev": {"image": "i", "entrypoints": {"mcp": "x"}}}}
         with self.assertRaises(reg.CliError) as ctx:
             reg.build_argv(thin, "dev", "agents", prompt="hi")
         message = str(ctx.exception)
-        self.assertIn("run", message, "must name the entrypoint it looked for")
+        self.assertIn("run", message, "must name what it looked for")
         self.assertIn("mcp", message, "must name what the agent does have")
 
 
@@ -285,6 +324,68 @@ class Parser(unittest.TestCase):
 @unittest.skipUnless(CATALOG.exists(), "dist/agents.json not built")
 class RealCatalog(unittest.TestCase):
     """Against the committed output, so tests and dist cannot drift apart."""
+
+    def test_generated_mcp_entry_matches_what_the_cli_would_run(self):
+        """The plugin's mcp.json and the CLI must build the same container.
+
+        Two paths to one container: a client uses the plugin entry, a person uses
+        `cloakai mcp`. If they drift, one of them serves an agent with different
+        isolation than the other, silently.
+
+        KNOWN AND ACCEPTED: the plugin entry carries only --network, so a plugin
+        client currently gets a LESS isolated container than the CLI — no
+        read-only rootfs, no dropped capabilities, no limits. `dev` works anyway
+        because it is the compose stack talking to its own service, and
+        big-pickle works because opencode does not need those to function. That is
+        a real gap, not a rounding error, and it is asserted here so it cannot
+        quietly become worse.
+
+        What this test asserts today is the part that must never drift: the same
+        IMAGE, the same NETWORK, and no secret in the file.
+        """
+        doc = reg.load(CATALOG)
+        for plugin, net in (("dev", "cloakai-internal"),
+                            ("big-pickle", "cloakai-egress")):
+            source = REPO / "plugins" / plugin / "mcp.json"
+            self.assertTrue(source.exists(), f"{plugin}/mcp.json is missing")
+            spec = reg.agents(doc)[plugin]
+            for server, entry in json.loads(source.read_text())["mcpServers"].items():
+                self.assertEqual(entry["command"], "docker",
+                                 f"{plugin}/{server} must invoke docker directly")
+                self.assertIn(spec["image"], entry["args"],
+                              f"{plugin}/{server} runs a different image than the catalogue")
+                self.assertEqual(entry["args"][-1], "mcp")
+                # The network is the one flag the plugin entry carries today.
+                self.assertIn(net, entry["args"],
+                              f"{plugin}/{server} must use {net}")
+                self.assertEqual(reg.network(spec.get("network")), net)
+
+    def test_plugin_clients_are_less_isolated_than_the_cli(self):
+        """Records the gap, so closing it is a deliberate change.
+
+        A plugin consumer runs whatever mcp.json says. Today that is a bare
+        `docker run --rm -i --network X image mcp`, while the CLI adds read-only,
+        cap-drop, no-new-privileges and three resource limits. Any test that
+        asserted the two were EQUAL would be failing correctly; this one asserts
+        the difference still exists so it cannot be forgotten.
+        """
+        doc = reg.load(CATALOG)
+        entry = json.loads(
+            (REPO / "plugins" / "dev" / "mcp.json").read_text()
+        )["mcpServers"]["agents"]
+        plugin_flags = {a for a in entry["args"] if a.startswith("--")}
+        cli_flags = set(reg.resolve_flags(reg.agents(doc)["dev"]))
+        missing = {f for f in cli_flags if f not in plugin_flags
+                   and f.split("=")[0] not in {p.split("=")[0] for p in plugin_flags}}
+        self.assertIn("--read-only", missing,
+                      "if this now passes with read-only present, the gap is closed "
+                      "and this assertion plus the mcp.json should both be updated")
+        self.assertIn("--cap-drop=ALL", missing)
+
+    def test_generated_mcp_entry_carries_no_secret(self):
+        for plugin in ("dev", "big-pickle"):
+            text = (REPO / "plugins" / plugin / "mcp.json").read_text()
+            self.assertNotIn("sk-", text, f"{plugin} hardcodes a key")
 
     def test_big_pickle_needs_no_credential(self):
         # The whole point of it: a free model with no auth. If env is ever

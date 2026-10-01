@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -223,15 +224,31 @@ def build_argv(
     # Shape name -> the entrypoint key that implements it. Keeping this in one
     # table is what stopped `cloakai agents` from looking for an entrypoint
     # literally called "agents".
-    entry_key = SHAPES[shape]
+    # `mcp` is passed as a mode name, because the image's entrypoint dispatches on
+    # it. `agents` is passed the FULL COMMAND, because that is what has to run:
+    # passing the key made the entrypoint fall back to a hardcoded
+    # `opencode run --auto`, which silently dropped `--model opencode/big-pickle`
+    # and then hung forever with no output, because a wrong model does not fail.
     entrypoints = spec.get("entrypoints") or {}
-    entry = entrypoints.get(entry_key)
-    if not entry:
-        available = ", ".join(sorted(entrypoints)) or "none"
-        raise CliError(
-            f"agent '{name}' has no '{entry_key}' entrypoint, so it cannot be used "
-            f"as '{shape}'. It has: {available}"
-        )
+    if shape == "mcp":
+        mode = "mcp"
+        if not entrypoints.get("mcp"):
+            raise CliError(
+                f"agent '{name}' declares no mcp entrypoint, so it cannot serve "
+                f"MCP. It has: {', '.join(sorted(entrypoints)) or 'none'}"
+            )
+    else:
+        # `run-cmd`, NOT `run`. `run` is the shape name; sending it reached no case
+        # arm in the entrypoint and printed the usage banner in 0.06s.
+        mode = "run-cmd"
+        # The command the agent declares. Validated here rather than trusted,
+        # because a missing one would exec `run-cmd` with nothing after it and the
+        # container would exit silently.
+        if not entrypoints.get("run"):
+            raise CliError(
+                f"agent '{name}' declares no run command, so it cannot be invoked. "
+                f"It has: {', '.join(sorted(entrypoints)) or 'none'}"
+            )
 
     call_id = call_id or uuid.uuid4().hex[:12]
     started = int(time.time()) if started is None else started
@@ -251,8 +268,14 @@ def build_argv(
         *resolve_flags(spec),
         *build_env(spec, key),
         image,
-        entry_key,
+        mode,
     ]
+    if shape == "agents":
+        # The agent's command, split into tokens so nothing is re-parsed by a
+        # shell. `mode` above is the entrypoint's dispatch name.
+        argv += shlex.split(entrypoints.get("run", ""))
+        argv.append(prompt or "")
+    return argv
     if shape == "agents":
         argv.append(prompt or "")
     return argv

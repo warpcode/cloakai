@@ -298,9 +298,12 @@ def emit_catalog(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
                 "description": agent.get("description", ""),
                 "image": agent.get("image", ""),
                 "entrypoints": {
-                    # `run` is the ephemeral shape: one task, exit, container gone.
-                    "run": entrypoints.get("run", ""),
-                    # `mcp` is the long-lived shape: stdio, alive until stdin closes.
+                    # The FULL COMMAND for the ephemeral shape. Not a mode name: the
+                    # entrypoint execs this verbatim, so `--model` and every other
+                    # flag the agent needs actually runs.
+                    "run": entrypoints.get("run_cmd") or entrypoints.get("run", ""),
+                    # The long-lived shape is dispatched by mode name, because the
+                    # entrypoint has to route it.
                     "mcp": entrypoints.get("mcp", ""),
                 },
                 "flags": flags,

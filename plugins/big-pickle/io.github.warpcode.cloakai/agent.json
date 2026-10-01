@@ -14,7 +14,8 @@
   },
   "entrypoints": {
     "run": "opencode run --model opencode/big-pickle --auto",
-    "mcp": "docker-agent serve mcp /agent/agent.yaml -a big-pickle"
+    "mcp": "docker-agent serve mcp /agent/agent.yaml -a big-pickle",
+    "run_cmd": "opencode run --model opencode/big-pickle --auto"
   },
   "limits": {
     "cpus": "2",

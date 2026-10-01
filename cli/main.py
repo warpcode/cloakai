@@ -112,22 +112,30 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     else:
         print("docker      ok")
 
+    # One line per agent, with the network IT declared. Reporting a single
+    # "network ok" was misleading: big-pickle needs cloakai-egress and would have
+    # hung on cloakai-internal, so a green network line hid a real failure.
     if doc is not None:
         for name in reg.names(doc):
             spec = reg.agents(doc)[name]
             image = spec.get("image", "")
-            found = reg.image_exists(image)
-            print(f"image {name:<8}{'ok  ' if found else 'MISSING'} {image}")
-            if not found:
+            declared = spec.get("network", "internal")
+            net = reg.network(declared)
+            if not reg.image_exists(image):
+                print(f"  {name:<12} MISSING image {image}")
                 problems.append(f"image:{name}")
-
-    try:
-        reg.docker_network_inspect(reg.network())
-        print(f"network     ok   {reg.network()}")
-    except Exception:
-        print(f"network     MISSING {reg.network()} "
-              f"— docker network create --internal {reg.network()}")
-        problems.append("network")
+                continue
+            try:
+                reg.docker_network_inspect(net)
+            except Exception:
+                extra = (" — docker network create --internal "
+                         if declared == "internal" else
+                         " — it needs internet for its model; create it with "
+                         "docker network create ")
+                print(f"  {name:<12} MISSING network {net}{extra}")
+                problems.append(f"network:{name}")
+                continue
+            print(f"  {name:<12} ok  {image} on {net}")
 
     if reg.proxy_running():
         print("proxy       ok   litellm is up")

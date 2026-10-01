@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Two modes off one image, so there is no bespoke per-mode image to maintain.
 #
-#   cloakai-entrypoint run [args...]   the harness CLI, project dir already mounted
+#   cloakai-entrypoint run-cmd <cmd...> run the exact command agent.json declares
 #   cloakai-entrypoint mcp             docker agent serve mcp over stdio
 #
 # The mcp invocation carries --insecure-no-auth because the container is reached by
@@ -14,8 +14,13 @@ mode="${1:-run}"
 [ $# -gt 0 ] && shift || true
 
 case "$mode" in
-  run)
-    exec opencode run --auto "$@"
+  # `run` is NOT dispatched here. The caller passes the full command the agent
+  # declares in agent.json, so this branch exists only to run it. Dispatching a
+  # hardcoded `opencode run --auto` silently dropped `--model opencode/big-pickle`
+  # and left the run hanging with no output, because a wrong model does not fail —
+  # it waits. One source of truth: agent.json.
+  run-cmd)
+    exec "$@"
     ;;
 
   mcp)
@@ -54,7 +59,7 @@ case "$mode" in
     ;;
 
   *)
-    echo "usage: cloakai-entrypoint {run|mcp|mcp-http|shell} [args...]" >&2
+    echo "usage: cloakai-entrypoint {run-cmd|mcp|mcp-http|shell} [args...]" >&2
     exit 2
     ;;
 esac

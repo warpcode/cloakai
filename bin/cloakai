@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# The `cloakai` command.
+#
+# Thin on purpose. It locates the repository root from its own path and hands
+# over to the CLI module, so `cloakai` works from any directory without the
+# caller setting PYTHONPATH. The catalogue is resolved relative to the CLI
+# module, not the cwd, so a bare `cloakai agents` from ~/ still finds
+# dist/agents.json.
+set -euo pipefail
+
+# bin/cloakai -> repo root, following symlinks so a link onto PATH still works.
+source_bin="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$source_bin")/.." && pwd)"
+
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+exec "${CLOAKAI_PYTHON:-python3}" -m cli.main "$@"

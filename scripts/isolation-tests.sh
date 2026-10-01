@@ -351,7 +351,7 @@ print(json.dumps({
       -e OPENCODE_CONFIG_CONTENT="$OC_CFG" \
       -e OPENCODE_API_KEY="$VK" \
       -e OPENCODE_DISABLE_MODELS_FETCH=1 \
-      "$IMAGE" run --auto "reply with exactly PONG" 2>&1 | tail -6)
+      "$IMAGE" run-cmd opencode run --auto "reply with exactly PONG" 2>&1 | tail -6)
 
     if echo "$reply" | grep -q "PONG"; then
       ok "8. a complete model call succeeds through the proxy, under full isolation,"

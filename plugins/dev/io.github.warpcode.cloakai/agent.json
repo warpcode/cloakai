@@ -14,7 +14,8 @@
   "entrypoints": {
     "run": "opencode run --auto",
     "mcp": "docker-agent serve mcp /agent/agent.yaml -a dev",
-    "mcp_http": "docker-agent serve mcp /agent/agent.yaml -a dev --http --listen 0.0.0.0:8081 --insecure-no-auth"
+    "mcp_http": "docker-agent serve mcp /agent/agent.yaml -a dev --http --listen 0.0.0.0:8081 --insecure-no-auth",
+    "run_cmd": "opencode run --auto"
   },
   "limits": {
     "cpus": "2",
