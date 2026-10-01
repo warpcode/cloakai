@@ -230,7 +230,8 @@ def call_agent(
         raise GatewayError("'prompt' is required and must be a non-empty string")
 
     key = mint_key()
-    if key is None and (agents(manifest)[agent_name].get("env") or {}):
+    agent_spec = agents(manifest).get(agent_name) or {}
+    if key is None and (agent_spec.get("env") or {}):
         return (f"[{agent_name}] the model proxy did not answer, so no key could be "
                 "minted and this agent has no model endpoint. Is the stack up? "
                 "docker compose -f infra/compose.yml up -d")
