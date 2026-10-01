@@ -87,7 +87,10 @@ def compile_plugin(plugin_root: Path, dist_root: Path, clients_root: Path) -> li
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Compile a cloakai source plugin for every target client.")
-    ap.add_argument("plugin", nargs="?", default="plugins/dev", help="source plugin directory")
+    ap.add_argument(
+        "plugin", nargs="*", default=["plugins/dev"],
+        help="one or more source plugin directories; the catalogue merges them",
+    )
     ap.add_argument("--out", default=DIST_DIR, help="directory for generated plugin trees")
     ap.add_argument("--clients-out", default=CLIENTS_DIR, help="directory for generated config files")
     ap.add_argument("--keep", action="store_true", help="do not clean the output directories first")
@@ -98,22 +101,32 @@ def main(argv: list[str] | None = None) -> int:
     dist_root = Path(args.out).resolve()
     clients_root = Path(args.clients_out).resolve()
 
-    plugin_root = Path(args.plugin).resolve()
-    if not plugin_root.is_dir():
-        print(f"error: {args.plugin} is not a directory", file=sys.stderr)
-        return 2
+    plugin_roots = [Path(p).resolve() for p in args.plugin]
+    for root in plugin_roots:
+        if not root.is_dir():
+            print(f"error: {root} is not a directory", file=sys.stderr)
+            return 2
 
     if not args.keep:
         clean_output(dist_root, clients_root)
 
+    written: list[Path] = []
     try:
-        written = compile_plugin(plugin_root, dist_root, clients_root)
+        # Every plugin is compiled. The per-client trees are per-plugin and are
+        # named by directory, so they coexist; the catalogue MERGES, which is why
+        # the order does not matter and adding an agent needs no code change.
+        #
+        # clean_output runs once above, not per plugin, so a second plugin cannot
+        # delete the first plugin's output.
+        for root in plugin_roots:
+            written += compile_plugin(root, dist_root, clients_root)
     except V.ValidationError as e:
         print(f"validation failed: {e}", file=sys.stderr)
         return 1
 
     if not args.quiet:
-        print(f"compiled {plugin_root.name}: {len(written)} paths written")
+        names = ", ".join(r.name for r in plugin_roots)
+        print(f"compiled {names}: {len(written)} paths written")
         for path in written:
             if path.is_dir():
                 continue

@@ -1,0 +1,41 @@
+{
+  "$comment": "The ONLY file that must change when the runtime changes.",
+  "name": "big-pickle",
+  "description": "General assistant on the free big-pickle model. Use for quick questions, drafting, and anything that does not need a paid model or a working directory.",
+  "instructions": [
+    "skills/"
+  ],
+  "runtime": "opencode",
+  "image": "cloakai/big-pickle:latest",
+  "upstream": {
+    "provider": "opencode",
+    "id": "big-pickle",
+    "base_url": "https://opencode.ai/zen/v1"
+  },
+  "entrypoints": {
+    "run": "opencode run --model opencode/big-pickle --auto",
+    "mcp": "docker-agent serve mcp /agent/agent.yaml -a big-pickle"
+  },
+  "limits": {
+    "cpus": "2",
+    "memory": "4g",
+    "pids": 1024
+  },
+  "isolation": {
+    "network": "egress",
+    "read_only": true,
+    "tmpfs": [
+      "/tmp",
+      "/root/.local",
+      "/root/.config",
+      "/root/.cache"
+    ],
+    "cap_drop": [
+      "ALL"
+    ],
+    "no_new_privileges": true
+  },
+  "mcp_servers": [
+    "big-pickle"
+  ]
+}

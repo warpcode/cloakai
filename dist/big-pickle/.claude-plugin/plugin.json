@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "big-pickle",
+  "description": "General assistant on the free big-pickle model. Use for quick questions, drafting, and anything that does not need a paid model or a working directory.",
+  "version": "0.1.0"
+}

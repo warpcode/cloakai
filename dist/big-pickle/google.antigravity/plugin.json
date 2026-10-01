@@ -1,0 +1,5 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "big-pickle",
+  "description": "General assistant on the free big-pickle model, compiled from one source for every client."
+}

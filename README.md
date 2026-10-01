@@ -23,11 +23,39 @@ Two shapes, and the difference is only which entrypoint they use.
 
 ```bash
 cloakai agents                      # list what you can invoke
-cloakai agents dev "review this"    # ephemeral: one task, then destroyed
+cloakai prompt big-pickle "what is 1+1"   # one task, then destroyed
+cloakai agents dev "review this"    # the same thing, spelled out
 cloakai mcp dev                     # long-lived: stdio until stdin closes, then destroyed
 cloakai show dev                    # one agent's catalogue entry, as JSON
 cloakai doctor                      # is anything actually runnable
 ```
+
+### big-pickle
+
+The free model, and the one agent that needs no credential at all:
+
+```bash
+cloakai prompt big-pickle "what is 1+1"
+```
+
+It runs `opencode run --model opencode/big-pickle` inside a container and needs no
+key, because `opencode.ai/zen` serves that model without authentication.
+
+**It is on `cloakai-egress`, not `cloakai-internal`.** `dev` reaches a model through
+the LiteLLM proxy on the internal network; big-pickle talks to `opencode.ai/zen`
+directly, and `cloakai-internal` has no route out. On the wrong network it does not
+error — it hangs, which is why the network is declared per agent rather than
+assumed:
+
+```json
+"isolation": { "network": "egress", "read_only": true, "tmpfs": [ ... ] }
+```
+
+Everything else is unchanged: read-only rootfs, dropped capabilities, no workspace,
+`--rm`. Egress means it can reach the internet, so it is the one agent where "only
+litellm leaves the machine" does not hold.
+
+### Two shapes
 
 `agents` is ephemeral. The docker run carries `--rm`, so destruction is not a
 cleanup step that can be forgotten — the container cannot outlive the command.

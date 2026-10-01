@@ -100,14 +100,32 @@ def get(doc: dict[str, Any], name: str) -> dict[str, Any]:
     return spec
 
 
-def network() -> str:
-    return os.environ.get("CLOAKAI_NETWORK") or DEFAULT_NETWORK
+#: Cloakai network -> the two real Docker network names. An agent declares
+#: "internal" or "egress"; the actual names are stack naming, not agent policy, so
+#: the mapping lives here rather than in any agent.json.
+NETWORKS = {
+    "internal": "cloakai-internal",
+    "egress": "cloakai-egress",
+}
+
+
+def network(declared: str | None = None) -> str:
+    """The Docker network for an agent that declared one.
+
+    CLOAKAI_NETWORK still wins, but only for the internal network: that is the one
+    an operator renames to match their own stack. Egress is structural — an agent
+    that needs the internet is on the network that has it — so overriding it would
+    silently produce a container that cannot reach its model.
+    """
+    if declared == "egress":
+        return os.environ.get("CLOAKAI_EGRESS_NETWORK") or NETWORKS["egress"]
+    return os.environ.get("CLOAKAI_NETWORK") or NETWORKS["internal"]
 
 
 def resolve_flags(spec: dict[str, Any]) -> list[str]:
     """The agent's declared flags, with only the network sentinel resolved."""
     return [
-        str(flag).replace(NETWORK_PLACEHOLDER, network())
+        str(flag).replace(NETWORK_PLACEHOLDER, network(spec.get("network")))
         for flag in spec.get("flags", [])
     ]
 

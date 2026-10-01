@@ -96,6 +96,42 @@ class Isolation(unittest.TestCase):
         self.assertNotIn("NETWORK_PLACEHOLDER", argv())
         self.assertIn("cloakai-internal", argv())
 
+    def test_declared_network_selects_the_right_one(self):
+        # An agent declares "internal" or "egress" and the CLI maps it to a real
+        # Docker network name. Getting this wrong silently produces a container
+        # that cannot reach its model: cloakai-internal has no egress, so
+        # big-pickle hung there with no error at all.
+        egress = json.loads(json.dumps(SPEC))
+        egress["network"] = "egress"
+        flags = reg.build_argv({"agents": {"dev": egress}}, "dev", "agents", prompt="x")
+        self.assertIn("cloakai-egress", flags)
+        self.assertNotIn("cloakai-internal", flags)
+
+    def test_internal_network_override_still_applies(self):
+        import os
+        os.environ["CLOAKAI_NETWORK"] = "my-internal"
+        try:
+            spec = json.loads(json.dumps(SPEC))
+            spec["network"] = "internal"
+            flags = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="x")
+            self.assertIn("my-internal", flags)
+        finally:
+            del os.environ["CLOAKAI_NETWORK"]
+
+    def test_egress_is_not_overridable_by_the_internal_variable(self):
+        # CLOAKAI_NETWORK renames the internal network. If it also renamed egress,
+        # an operator could point an agent at a network with no internet and get a
+        # hang rather than an error.
+        import os
+        os.environ["CLOAKAI_NETWORK"] = "my-internal"
+        try:
+            spec = json.loads(json.dumps(SPEC))
+            spec["network"] = "egress"
+            flags = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="x")
+            self.assertIn("cloakai-egress", flags)
+        finally:
+            del os.environ["CLOAKAI_NETWORK"]
+
     def test_network_override_is_honoured(self):
         import os
         os.environ["CLOAKAI_NETWORK"] = "other-net"
@@ -231,6 +267,11 @@ class Parser(unittest.TestCase):
         args = build_parser().parse_args(["agents"])
         self.assertIsNone(args.name)
 
+    def test_prompt_verb_parses_like_agents(self):
+        args = build_parser().parse_args(["prompt", "big-pickle", "what", "is", "1+1"])
+        self.assertEqual(args.name, "big-pickle")
+        self.assertEqual(args.prompt, ["what", "is", "1+1"])
+
     def test_mcp_takes_a_name(self):
         self.assertEqual(build_parser().parse_args(["mcp", "dev"]).name, "dev")
 
@@ -244,6 +285,15 @@ class Parser(unittest.TestCase):
 @unittest.skipUnless(CATALOG.exists(), "dist/agents.json not built")
 class RealCatalog(unittest.TestCase):
     """Against the committed output, so tests and dist cannot drift apart."""
+
+    def test_big_pickle_needs_no_credential(self):
+        # The whole point of it: a free model with no auth. If env is ever
+        # populated, the CLI starts minting proxy keys for an agent that needs
+        # none, and the agent would stop working if the proxy were down.
+        spec = reg.agents(reg.load(CATALOG)).get("big-pickle")
+        if spec is None:
+            self.skipTest("big-pickle is not in the catalogue")
+        self.assertEqual(spec["env"], {}, "big-pickle must declare no env")
 
     def test_every_agent_supports_both_shapes(self):
         # The CLI offers exactly two shapes. An agent that can only do one of them

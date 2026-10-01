@@ -304,6 +304,10 @@ def emit_catalog(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
                     "mcp": entrypoints.get("mcp", ""),
                 },
                 "flags": flags,
+                # The network as DECLARED ("internal"/"egress"), so the CLI can
+                # resolve it. The flag list still carries the placeholder, because
+                # that is what agents/isolation-flags carries too.
+                "network": iso.get("network", "internal"),
                 "env": agent.get("env", {}),
                 "model": upstream.get("id", "default"),
                 "base_url": upstream.get("base_url", "http://litellm:4000/v1"),

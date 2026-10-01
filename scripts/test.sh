@@ -53,6 +53,20 @@ fi
 
 # ---------------------------------------------------------------- the cli
 head_ "cli"
+# A real answer from a real model. NOT a fixed reply: the mock upstream in the
+# compose stack answers "PONG" to everything, so asserting on PONG proves only
+# that plumbing carries bytes. These two cannot be produced by a mock.
+if timeout 600 python3 -m cli.main prompt big-pickle "what is 1+1? Answer with only the number." 2>/dev/null | grep -qE '^2[[:space:]]*$'; then
+  ok "big-pickle answers 1+1 correctly, from the real model"
+else
+  no "big-pickle did not answer 1+1 correctly (is the image built? is cloakai-egress up?)"
+fi
+
+if timeout 600 python3 -m cli.main prompt big-pickle "What is the capital of Japan? Answer with only the city." 2>/dev/null | grep -qi 'tokyo'; then
+  ok "big-pickle gives a model-specific answer, not a canned one"
+else
+  no "big-pickle did not answer the capital of Japan"
+fi
 # The dispatch logic, without Docker: which entrypoint a shape maps to, that the
 # catalogue's isolation flags survive verbatim, and that nothing mounts the host.
 if python3 -m unittest discover -s cli/tests -t . 2>&1 | tail -3 | grep -q "^OK"; then
@@ -85,15 +99,29 @@ fi
 
 # ---------------------------------------------------------------- determinism
 head_ "determinism"
+# The agent list, so a compile that silently DROPS an agent cannot pass. The glob
+# bug in compile.sh lost big-pickle on a green run, and byte-identity did not catch
+# it: it compared one wrong output against the same wrong output.
+catalogue_agents() {
+  python3 -c 'import json,sys; print(",".join(sorted(json.load(open("dist/agents.json"))["agents"])))' 2>/dev/null || echo "<unreadable>"
+}
+
 if ./scripts/compile.sh --quiet 2>/dev/null; then
   before=$(find dist clients -type f -exec sha256sum {} \; 2>/dev/null | sort)
+  before_agents=$(catalogue_agents)
   if ./scripts/compile.sh --quiet 2>/dev/null; then
     after=$(find dist clients -type f -exec sha256sum {} \; 2>/dev/null | sort)
+    after_agents=$(catalogue_agents)
     if [ "$before" = "$after" ]; then
       ok "two runs produce byte-identical output"
     else
       no "two runs differ — something non-deterministic crept in"
       diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -10
+    fi
+    if [ "$before_agents" != "$after_agents" ]; then
+      no "recompiling changed the agent list: $before_agents -> $after_agents"
+    else
+      ok "every agent survives a recompile ($after_agents)"
     fi
   else
     no "second compile failed"

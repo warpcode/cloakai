@@ -1,7 +1,8 @@
 """`cloakai` — invoke an agent, or serve one as an MCP server.
 
     cloakai agents                     list the agents you can invoke
-    cloakai agents dev "review this"    one task, then the container is destroyed
+    cloakai prompt big-pickle "what is 1+1"   one task, then destroyed
+    cloakai agents dev "review this"    the same thing, spelled out
     cloakai mcp dev                    serve stdio until stdin closes, then destroyed
     cloakai show dev                   what the catalogue says about one agent
     cloakai doctor                     is anything actually runnable
@@ -69,6 +70,11 @@ def _run_agents(args: argparse.Namespace) -> int:
         passthrough_key=args.key,
     )
     return EXIT_OK if code == 0 else (code if code not in (0,) else EXIT_FAILED)
+
+
+def _cmd_prompt(args: argparse.Namespace) -> int:
+    """`cloakai prompt <name> "text"` — the same ephemeral call as `agents`."""
+    return _run_agents(args)
 
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
@@ -156,6 +162,19 @@ def build_parser() -> argparse.ArgumentParser:
     agents.add_argument("--json", action="store_true", help="emit JSON when listing")
     agents.add_argument("--key", help="use this key instead of minting one")
     agents.set_defaults(func=_cmd_agents)
+
+    # `prompt` is the short verb for the ephemeral shape. It is not a third shape
+    # and not an alias that can drift: it dispatches to exactly what
+    # `cloakai agents` does.
+    prompt = sub.add_parser(
+        "prompt", help='ask an agent something: cloakai prompt <name> "text"',
+    )
+    prompt.add_argument("name")
+    prompt.add_argument("prompt", nargs="*")
+    prompt.add_argument("--budget", default="1.00", help="ignored by agents needing no key")
+    prompt.add_argument("--timeout", type=int, default=reg.DEFAULT_TIMEOUT)
+    prompt.add_argument("--key")
+    prompt.set_defaults(func=_cmd_prompt)
 
     mcp = sub.add_parser("mcp", help="serve an agent as a stdio MCP server")
     mcp.add_argument("name", help="agent to serve")

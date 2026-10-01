@@ -1,0 +1,16 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "big-pickle",
+  "version": "0.1.0",
+  "description": "General assistant on the free big-pickle model, compiled from one source for every client.",
+  "author": { "name": "warpcode" },
+  "repository": "https://github.com/warpcode/cloakai",
+  "license": "MIT",
+  "keywords": ["assistant", "free", "no-auth"],
+  "extensions": {
+    "io.github.warpcode.cloakai": {
+      "runtime": "opencode",
+      "image": "cloakai/big-pickle:latest"
+    }
+  }
+}
