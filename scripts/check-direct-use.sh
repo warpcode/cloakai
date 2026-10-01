@@ -4,9 +4,9 @@
 #     docker run --rm <image> mcp
 #
 # This is the property the whole architecture rests on — that the image is the
-# product and the gateway is optional. It has been verified by hand several times
+# product, with nothing else running. It has been verified by hand several times
 # and by nothing automatic, which is precisely how plugins/dev/mcp.json came to
-# point at a gateway service that was never in compose while every test stayed
+# point at a service that was never in compose while every test stayed
 # green. So it runs here now.
 #
 # The dev image needs no credential to list tools, so this is unconditional.
@@ -51,7 +51,6 @@ docker image inspect "$HARNESS" >/dev/null 2>&1 || {
 echo "  dev image over stdio, no gateway"
 out=$(timeout 300 docker run --rm --entrypoint python \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        -v "$ROOT/gateway:/srv/gateway:ro" \
         -e CLOAKAI_NETWORK="$NETWORK" \
         "$HARNESS" -m tests.direct_use 2>&1)
 

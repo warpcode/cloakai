@@ -17,6 +17,39 @@ contact with a real change.
 So: one source, four translation rules, no per-client special-casing in the source. Editing
 one file changes every target.
 
+## The `cloakai` CLI
+
+Two shapes, and the difference is only which entrypoint they use.
+
+```bash
+cloakai agents                      # list what you can invoke
+cloakai agents dev "review this"    # ephemeral: one task, then destroyed
+cloakai mcp dev                     # long-lived: stdio until stdin closes, then destroyed
+cloakai show dev                    # one agent's catalogue entry, as JSON
+cloakai doctor                      # is anything actually runnable
+```
+
+`agents` is ephemeral. The docker run carries `--rm`, so destruction is not a
+cleanup step that can be forgotten — the container cannot outlive the command.
+
+`mcp` is long-lived but still disposable. It serves stdio until stdin closes and is
+destroyed then. Every caller spawns **its own** container, so two clients using the
+same agent are isolated from each other by having separate containers.
+
+There is deliberately no `cloakai serve` and no shared daemon. A CLI is
+per-invocation, so every shape it offers is ephemeral by construction; anything
+long-running would need something to hold it, and nothing here does that on
+purpose.
+
+The CLI holds no isolation policy. Every flag comes from `dist/agents.json`,
+generated from each agent's `agent.json`, so it cannot drift from what the plugin
+declared — and it never mounts a host directory, in either shape.
+
+```bash
+./scripts/compile.sh          # writes dist/agents.json
+PYTHONPATH=. python3 -m cli.main doctor
+```
+
 ## Quick start
 
 ```bash
@@ -25,7 +58,7 @@ one file changes every target.
 docker compose -f infra/compose.yml up -d       # the proxy and its credential store
 
 # daily
-./scripts/run.sh "review the diff on this branch"  # an isolated agent on your project
+PYTHONPATH=. python3 -m cli.main agents dev "review the diff on this branch"
 ./scripts/test.sh                                 # compiler + isolation tests
 ./scripts/install.sh                             # install the generated trees into clients
 ```

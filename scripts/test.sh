@@ -18,6 +18,26 @@ no()   { printf '  \033[31m✗\033[0m %s\n' "$*"; fail=$((fail+1)); }
 sk()   { printf '  \033[33m–\033[0m %s\n' "$*"; skip=$((skip+1)); }
 head_() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# -------------------------------------------------------------- the cli, live
+head_ "cli (end to end)"
+# Both shapes, for real: `cloakai agents dev` must answer and leave no container,
+# and `cloakai mcp dev` must stay alive while a client holds the pipe open and be
+# gone once it closes. That second one is a claim about process lifetime, which is
+# easy to assert and easy to get wrong, so it is asserted against real containers.
+if timeout 900 docker run --rm --entrypoint python \
+     -v /var/run/docker.sock:/var/run/docker.sock \
+     -v "$ROOT:/srv:ro" \
+     -e CLOAKAI_NETWORK="${CLOAKAI_NETWORK:-cloakai-internal}" \
+     -e REPO=/srv \
+     "${PROBE_IMAGE:-cloakai/probe:latest}" \
+     -m tests.cli_end_to_end >/tmp/cloakai-cli-e2e.log 2>&1; then
+  ok "both CLI shapes work and leave nothing behind"
+  grep -E 'tools/list|container (alive|destroyed)|no container' /tmp/cloakai-cli-e2e.log | sed 's/^/     /'
+else
+  no "the CLI end-to-end check failed"
+  tail -20 /tmp/cloakai-cli-e2e.log | sed 's/^/     /'
+fi
+
 # ---------------------------------------------------- independent use, directly
 head_ "independent use"
 # The claim the architecture rests on: an image is the product, so
@@ -29,6 +49,17 @@ if ./scripts/check-direct-use.sh; then
   ok "images are usable directly"
 else
   no "an image is not usable directly"
+fi
+
+# ---------------------------------------------------------------- the cli
+head_ "cli"
+# The dispatch logic, without Docker: which entrypoint a shape maps to, that the
+# catalogue's isolation flags survive verbatim, and that nothing mounts the host.
+if python3 -m unittest discover -s cli/tests -t . 2>&1 | tail -3 | grep -q "^OK"; then
+  ok "cli unit tests"
+else
+  no "cli unit tests"
+  python3 -m unittest discover -s cli/tests -t . 2>&1 | tail -20
 fi
 
 # ---------------------------------------------------------------- jules image
@@ -179,7 +210,7 @@ else
 fi
 
 # tools/list requires the gateway, which does not exist until Phase 2/3.
-sk "MCP tools/list: EXPECTED TO FAIL — gateway not built yet (Phase 2/3)"
+sk "MCP tools/list against the compose service: superseded — clients spawn the image over stdio instead (see scripts/check-direct-use.sh)"
 sk "VS Code skill listing: needs a GUI session; verify manually"
 
 # ---------------------------------------------------------------- isolation
