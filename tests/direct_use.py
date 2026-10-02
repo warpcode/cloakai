@@ -26,6 +26,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import sys
+
+sys.path.insert(0, os.environ.get("REPO", "/srv"))
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -56,19 +59,30 @@ def _cleanup() -> None:
 
 
 async def main() -> int:
-    # This is the whole interface. No gateway, no manifest, no proxy hop of ours.
-    command = "docker"
-    args = ["run", "--rm", "-i", "--network",
-            os.environ.get("CLOAKAI_NETWORK", "cloakai-internal"), IMAGE, "mcp"]
+    # Build the command line with the CLI itself, rather than spelling out a docker
+    # argv here. This test previously hardcoded `--network cloakai-internal`, which
+    # stopped existing when the compose stack went; the failure it produced was
+    # "Connection closed" with nothing on stderr, because the container never
+    # started. A test that assembles its own command line can disagree with the
+    # product in exactly that way, silently.
+    from cli import registry as reg
 
-    params = StdioServerParameters(command=command, args=args, env=dict(os.environ))
+    catalog = reg.load()
+    name = IMAGE.split("/")[-1].split(":")[0]
+    if name not in reg.agents(catalog):
+        name = reg.names(catalog)[0]
+        print(f"note: {IMAGE} is not in the catalogue; testing {name} instead")
+
+    args = reg.build_argv(catalog, name, "mcp")
+
+    params = StdioServerParameters(command=args[0], args=args[1:], env=dict(os.environ))
 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
-            init = await session.initialize()
-            print(f"connected to {IMAGE}: {init.server_info.name}")
+            init = await asyncio.wait_for(session.initialize(), timeout=90)
+            print(f"connected to {name}: {init.server_info.name}")
 
-            tools = await session.list_tools()
+            tools = await asyncio.wait_for(session.list_tools(), timeout=30)
             names = sorted(t.name for t in tools.tools)
             print(f"tools/list -> {names}")
             if not names:

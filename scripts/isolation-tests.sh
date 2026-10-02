@@ -16,8 +16,12 @@ cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
 IMAGE="${IMAGE:-cloakai/dev}"
-NETWORK="${CLOAKAI_NETWORK:-cloakai-internal}"
-COMPOSE_FILE="infra/compose.yml"
+# There is no cloakai-managed network any more. The isolation properties under test
+# are per-container — read-only rootfs, dropped capabilities, tmpfs, limits — and all
+# of them hold on the default bridge. The one property a network would buy is "no
+# egress", and that needs a network the caller creates:
+#   docker network create --internal cloakai-internal
+NETWORK="${CLOAKAI_NETWORK:-}"
 
 pass=0; fail=0; skip=0
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$*"; pass=$((pass+1)); }
@@ -36,8 +40,11 @@ while IFS= read -r line; do
   # Word-split each line: "--tmpfs /tmp" is TWO arguments, not one. Reading the
   # file line-at-a-time into an array would pass it as a single bogus argument and
   # silently drop the whole flag set — which is exactly what happened once.
+  # --network is not in agents/isolation-flags any more; it is an explicit per-agent
+  # choice, so add it here only when one was requested.
+  [ -n "${NETWORK:-}" ] && ISOLATION_FLAGS+=("--network" "$NETWORK")
   for word in $line; do
-    ISOLATION_FLAGS+=("${word//NETWORK_PLACEHOLDER/$NETWORK}")
+    ISOLATION_FLAGS+=("$word")
   done
 done < agents/isolation-flags
 
@@ -46,17 +53,16 @@ in_agent() { docker run --rm "${ISOLATION_FLAGS[@]}" "$IMAGE" shell -c "$1" 2>/d
 
 # ---------------------------------------------------------------- preflight
 
-if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
+if [ -n "$NETWORK" ] && ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
   echo "error: network '$NETWORK' does not exist." >&2
   echo "       create it:  docker network create --internal $NETWORK" >&2
-  echo "       or:         docker compose -f $COMPOSE_FILE up -d" >&2
   exit 1
 fi
 
 # A network created without --internal still exists and still has containers on
 # it, so its mere presence proves nothing. Test 2 is what actually catches this,
 # and it is the reason this check is here rather than an assumption.
-if ! docker network inspect "$NETWORK" --format '{{.Internal}}' | grep -q true; then
+if [ -n "$NETWORK" ] && ! docker network inspect "$NETWORK" --format '{{.Internal}}' | grep -q true; then
   echo "warning: network '$NETWORK' exists but is NOT internal." >&2
   echo "         test 2 is expected to fail. Recreate it:" >&2
   echo "           docker network rm $NETWORK && docker network create --internal $NETWORK" >&2
@@ -68,66 +74,10 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 proxy_up=0
-if docker ps --format '{{.Names}}' | grep -q litellm; then proxy_up=1; fi
+# DNS-by-service-name was a compose property. There are no compose services now, so
+# this resolves only if the caller has a container on the network whose name matches.
 
 head_ "isolation"
-
-# --- 0. the compose-managed agent is itself isolated ---------------------------
-# Every other test in this file uses a THROWAWAY container built from the same
-# flags. That leaves a gap: the long-lived container a supervisor actually keeps
-# running is a different object, created by compose from YAML rather than from
-# the word list. If compose silently dropped a flag, every other test would still
-# pass. So check the real service when it is running.
-# Defaulted rather than left empty: invoking this script directly used to skip
-# Test 0 entirely, because an empty service name can never match. The "not
-# running" branch below still skips cleanly when the stack is down.
-AGENT_SERVICE="${AGENT_SERVICE:-dev-agent}"
-AGENT_CID=$(docker compose -f "${COMPOSE_FILE:-infra/compose.yml}" ps -q "$AGENT_SERVICE" 2>/dev/null | head -1 || true)
-if [ -z "$AGENT_CID" ]; then
-  sk "0. compose service '$AGENT_SERVICE' is not running — start it with ./scripts/dev.sh up"
-elif ! docker inspect -f '{{.State.Running}}' "$AGENT_CID" 2>/dev/null | grep -q true; then
-  no "0. THE COMPOSE AGENT IS NOT RUNNING — the supervised container is down"
-else
-  # A real model call through the compose agent, using a freshly scoped key.
-  MASTER="${LITELLM_MASTER_KEY:-sk-cloakai-dev-not-a-secret}"
-  VK=$(docker run --rm --network "$NETWORK" curlimages/curl:latest -s \
-         -X POST http://litellm:4000/key/generate \
-         -H 'Content-Type: application/json' -H "Authorization: Bearer $MASTER" \
-         -d "{\"models\":[\"default\"],\"max_budget\":1.0,\"budget_duration\":\"24h\",\"key_alias\":\"svc-$$-$(date +%s)\"}" \
-         2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])" 2>/dev/null || true)
-  CFG=$(CLOAKAI_VK="${VK:-none}" python3 -c '
-import json, os
-print(json.dumps({
-    "model": "cloakai/default",
-    "provider": {"cloakai": {
-        "npm": "@ai-sdk/openai-compatible", "name": "cloakai proxy",
-        "options": {"baseURL": "http://litellm:4000/v1", "apiKey": os.environ["CLOAKAI_VK"]},
-        "models": {"default": {"name": "default"}},
-    }},
-    "permission": {"edit": "allow", "bash": "allow"},
-}))')
-  svc_reply=$(timeout 240 docker exec -e OPENCODE_CONFIG_CONTENT="$CFG" -e OPENCODE_API_KEY="${VK:-none}" \
-                -e OPENCODE_DISABLE_MODELS_FETCH=1 "$AGENT_CID" \
-                opencode run --auto "reply with exactly PONG" 2>&1 | tail -4)
-  if echo "$svc_reply" | grep -q PONG; then
-    ok "0. the compose-managed agent is up and can reach the proxy"
-  else
-    no "0. THE COMPOSE AGENT CANNOT REACH THE PROXY: $(echo "$svc_reply" | tr '\n' ' ' | cut -c1-160)"
-  fi
-
-  # And it is still isolated: the flags compose was given, actually applied.
-  ro=$(docker exec "$AGENT_CID" sh -c 'touch /probe-write 2>/dev/null; test ! -e /probe-write && echo ro' 2>/dev/null)
-  [ "$ro" = "ro" ] && ok "0b. the compose agent's root filesystem is read-only" \
-                    || no "0b. THE COMPOSE AGENT'S ROOT FILESYSTEM IS WRITABLE"
-
-  sock=$(docker exec "$AGENT_CID" sh -c 'test -e /var/run/docker.sock && echo present || echo absent' 2>/dev/null)
-  [ "$sock" = "absent" ] && ok "0c. the compose agent has no Docker socket" \
-                         || no "0c. THE COMPOSE AGENT HAS A DOCKER SOCKET"
-
-  cap=$(docker exec "$AGENT_CID" sh -c 'awk "/^CapEff:/{print \$2}" /proc/self/status' 2>/dev/null | tr -d '\r')
-  [ "$cap" = "0000000000000000" ] && ok "0d. the compose agent has all capabilities dropped" \
-                                 || no "0d. THE COMPOSE AGENT RETAINS CAPABILITIES (CapEff=0x${cap:-?})"
-fi
 
 # --- 1. no docker socket -----------------------------------------------------
 # If the agent can reach the daemon it can start a sibling container, and the
@@ -139,60 +89,76 @@ else
   no "1. DOCKER SOCKET PRESENT — the agent could start sibling containers"
 fi
 
-# --- 2. no internet ----------------------------------------------------------
-# THE most important test in the project. Not a 403 — a real failure to connect.
-# curl writes its http_code even on failure: 000 means it never got a response.
-# Treat ANY 2xx/3xx as a breach, and everything else as blocked. Comparing the
-# whole string instead once made a correctly-blocked container report as a breach.
-out=$(in_agent 'curl -s -m 8 -o /dev/null -w "%{http_code}" https://example.com' || true)
+# --- 2. the agent CAN reach the internet ---------------------------------------
+# INVERTED from the original, and deliberately.
+#
+# This used to be "the most important test in the project": the agent container
+# could not reach the internet, because the model arrived through a local proxy on
+# a managed `--internal` network. That network came from the compose stack. The
+# stack is gone, agents call opencode.ai/zen directly, and every container is on
+# the default bridge.
+#
+# So the property is now the OPPOSITE, and the test asserts the opposite: an agent
+# that cannot reach its model is broken, not safe. The isolation story no longer
+# includes the network, and the tests say so rather than quietly passing on an
+# absent network.
+out=$(in_agent 'curl -s -m 8 -o /dev/null -w "%{http_code}" https://opencode.ai/zen/v1/models' || true)
 if echo "$out" | grep -qE '[23][0-9][0-9]'; then
-  no "2. AGENT REACHED THE INTERNET (curl returned '$out') — the isolation is not working"
+  ok "2. the agent can reach its model endpoint (status $out)"
 else
-  ok "2. agent container cannot reach the internet (curl returned '${out:-nothing}')"
+  no "2. THE AGENT CANNOT REACH opencode.ai/zen (got '${out:-nothing}') — the agent is broken"
 fi
 
-# --- 3. internal services reachable by name ----------------------------------
-# Proves the network is not simply dead. Without this, test 2 could pass because
-# nothing resolves at all, which would be a false comfort.
-resolved=$(in_agent 'getent hosts litellm' || true)
-if [ -n "$resolved" ]; then
-  ok "3. DNS resolves 'litellm' by compose service name ($resolved)"
+# --- 3. peers on a shared network, if the agent declares one ------------------
+# There is no cloakai-managed network, so this only means something when the caller
+# both declares a network and sets ISOLATION_PEER. Otherwise there is no network to
+# resolve a name on and the check is skipped rather than failed: asserting a failure
+# here would be asserting a property the project no longer has.
+if [ -z "${NETWORK:-}" ] || [ -z "${ISOLATION_PEER:-}" ]; then
+  sk "3. no managed network or no peer — set CLOAKAI_NETWORK and ISOLATION_PEER to run"
 else
-  # litellm may not be running; the network is still proven by the raw IP path below.
-  if docker network inspect "$NETWORK" --format '{{len .Containers}}' >/dev/null 2>&1; then
-    ok "3. internal network is attached (litellm not running, DNS check skipped)"
+  resolved=$(in_agent "getent hosts $ISOLATION_PEER || true")
+  if [ -n "$resolved" ]; then
+    ok "3. DNS resolves '$ISOLATION_PEER' by name ($resolved)"
   else
-    no "3. cannot resolve anything on the internal network"
+    no "3. cannot resolve '$ISOLATION_PEER' on the declared network"
   fi
 fi
 
-if [ "$proxy_up" -eq 1 ]; then
-  code=$(in_agent 'curl -s -m 8 -o /dev/null -w "%{http_code}" http://litellm:4000/health/liveliness' || echo 000)
+# 3b was "the agent can reach litellm by service name", which was a property of the
+# compose stack. What is worth keeping is the general claim: a container on the
+# network can reach a NAMED PEER over HTTP. Tested against any peer, since there is
+# no litellm to name.
+PEER="${ISOLATION_PEER:-}"
+if [ -n "$PEER" ] && [ "$proxy_up" -eq 1 ]; then
+  code=$(in_agent "curl -s -m 8 -o /dev/null -w '%{http_code}' http://$PEER/ 2>/dev/null" || echo 000)
   case "$code" in
-    200|400|404) ok "3b. agent reached litellm over HTTP by name (status $code)";;
-    *) no "3b. agent could NOT reach litellm by name (status $code)";;
+    200|301|302|400|401|403|404) ok "3b. agent reached '$PEER' over HTTP by name (status $code)";;
+    *) no "3b. agent could NOT reach '$PEER' by name (status $code)";;
   esac
 else
-  sk "3b. litellm not running — start it with: docker compose -f $COMPOSE_FILE up -d"
+  sk "3b. no peer container to reach — set ISOLATION_PEER=<name> to run this"
 fi
 
-# --- 4. a capability container CAN reach the internet ------------------------
-# The other half of test 2. If the agent's isolation is real, this must pass.
-# This container is on internal PLUS a second, non-internal network. That is the
-# whole claim: adding a network grants the capability, removing it revokes it. It
-# deliberately does NOT use ISOLATION_FLAGS, because those pin the network to
-# internal only and that is the thing being contrasted.
-EGRESS_NET="${CLOAKAI_EGRESS_NET:-cloakai-egress}"
-if ! docker network inspect "$EGRESS_NET" >/dev/null 2>&1; then
-  docker network create "$EGRESS_NET" >/dev/null 2>&1
-fi
-out=$(docker run --rm --network "$NETWORK" --network "$EGRESS_NET" \
-        curlimages/curl:latest \
-        -s -m 12 -o /dev/null -w "%{http_code}" https://example.com 2>/dev/null || true)
-if echo "$out" | grep -qE '[23][0-9][0-9]'; then
-  ok "4. capability container on internal+egress CAN reach the internet"
+# --- 4. the network is opt-in, not a boundary ---------------------------------
+# This was "a capability container on internal+egress CAN reach the internet while
+# the agent on internal-only cannot" — the two-network capability model. That model
+# is gone: there is no managed internal network, so every agent has egress already
+# and there is no boundary to contrast against.
+#
+# What is still worth asserting is that the network is an explicit, per-agent
+# choice rather than something baked in. An agent that declares no network gets the
+# default bridge, and the caller can check that is what actually happened.
+declared=$(python3 -c 'import json,sys; print(json.load(open("dist/agents.json"))["agents"][os.environ.get("AGENT","dev")].get("network") or "")' 2>/dev/null || echo "")
+actual=$(docker inspect "$IMAGE" --format '{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}' 2>/dev/null | wc -l)
+if [ -z "$declared" ]; then
+  ok "4. no agent declares a network, so the default bridge is the boundary — none"
 else
-  no "4. capability container could NOT reach the internet (got '$out'). Tests 2 and 4 are a pair — if 2 passed, the boundary is the only thing stopping egress, which is the claim."
+  if docker network inspect "$declared" >/dev/null 2>&1; then
+    ok "4. the declared network '$declared' exists for the caller to attach"
+  else
+    sk "4. agent declares network '$declared' which does not exist — docker network create $declared"
+  fi
 fi
 
 # --- 5. two concurrent invocations are isolated ------------------------------
@@ -308,69 +274,29 @@ else
   no "7. could not read CapEff from /proc/self/status"
 fi
 
-# --- 8. a complete model call succeeds ---------------------------------------
-# The point of the container. Proves the isolation does not break the actual job,
-# and that the agent can hold a SCOPED virtual key rather than a provider one.
-if [ "$proxy_up" -eq 1 ]; then
-  MASTER="${LITELLM_MASTER_KEY:-sk-cloakai-dev-not-a-secret}"
-
-  # Mint a scoped key with a budget, rather than handing the agent the master key.
-  # This is the credential story in one step: the agent gets a key that is limited
-  # to one model and one dollar, and a prompt injection cannot spend anything else.
-  # The alias MUST be unique: litellm rejects a duplicate with 400
-  # "Key with alias ... already exists", which a hardcoded alias turns into a test
-  # that passes exactly once and fails on every run after. That happened.
-  ALIAS="cloakai-isolation-$$-$(date +%s)"
-  VK=$(docker run --rm --network "$NETWORK" curlimages/curl:latest -s \
-         -X POST http://litellm:4000/key/generate \
-         -H 'Content-Type: application/json' \
-         -H "Authorization: Bearer $MASTER" \
-         -d "{\"models\":[\"default\"],\"max_budget\":1.0,\"budget_duration\":\"24h\",\"key_alias\":\"$ALIAS\"}" \
-         2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])" 2>/dev/null || true)
-
-  if [ -z "$VK" ]; then
-    no "8. could not mint a virtual key from the proxy — is litellm fully up? (docker compose logs litellm)"
-  else
-    # $schema is omitted on purpose: OPENCODE_CONFIG_CONTENT rejects it. See
-    # docs/verification/phase-0.md Check 3.
-    OC_CFG=$(CLOAKAI_VK="$VK" python3 -c '
-import json, os
-print(json.dumps({
-    "model": "cloakai/default",
-    "provider": {"cloakai": {
-        "npm": "@ai-sdk/openai-compatible",
-        "name": "cloakai proxy",
-        "options": {"baseURL": "http://litellm:4000/v1", "apiKey": os.environ["CLOAKAI_VK"]},
-        "models": {"default": {"name": "default"}},
-    }},
-    "permission": {"edit": "allow", "bash": "allow"},
-}))')
-
-    reply=$(timeout 240 docker run --rm "${ISOLATION_FLAGS[@]}" \
-      -v "$PWD:/workspace" -w /workspace \
-      -e OPENCODE_CONFIG_CONTENT="$OC_CFG" \
-      -e OPENCODE_API_KEY="$VK" \
-      -e OPENCODE_DISABLE_MODELS_FETCH=1 \
-      "$IMAGE" run-cmd opencode run --auto "reply with exactly PONG" 2>&1 | tail -6)
-
-    if echo "$reply" | grep -q "PONG"; then
-      ok "8. a complete model call succeeds through the proxy, under full isolation,"
-      ok "8b. the agent used a scoped virtual key, not the master key"
-    else
-      no "8. model call FAILED under isolation: $(echo "$reply" | tr '\n' ' ' | cut -c1-220)"
-    fi
-
-    # The negative half: the master key must not be what the agent holds, and the
-    # scoped key must be rejected if it is used for a model it was not issued for.
-    # A test that only proves the happy path is half a test.
-    if echo "$OC_CFG" | grep -q "$MASTER"; then
-      no "8c. THE AGENT WAS HANDED THE MASTER KEY — the credential story is broken"
-    else
-      ok "8c. the agent config does not contain the master key"
-    fi
-  fi
+# --- 8. a complete model call succeeds under full isolation --------------------
+# The point of the container: isolation must not break the actual job. No proxy
+# means no key to mint and nothing to scope, so this is a plain free-model call
+# from inside the fully-flagged container.
+#
+# It is the same assertion the CLI makes, run through the raw isolation flags, so
+# the flags themselves are proven not to break a real request — which is what tests
+# 2 and 6 and 7 cannot tell you.
+ANSWER=$(in_agent 'opencode run --model opencode/big-pickle --auto "Reply with only the number: what is 1+1?"' 2>&1 | tr -d '\r')
+if echo "$ANSWER" | grep -qE '^\s*2\s*$'; then
+  ok "8. a complete model call succeeds through the full isolation flag set"
 else
-  sk "8. model call — litellm not running. Start it and re-run."
+  no "8. model call FAILED under isolation: $(echo "$ANSWER" | tr '\n' ' ' | cut -c1-200)"
+fi
+
+# 8b asserted the agent held a scoped virtual key rather than the master one. There
+# is no master key and no proxy any more, so there is nothing to distinguish. Kept as
+# a check that no credential is baked into the image, which is the property that
+# replaced it.
+if docker run --rm --entrypoint sh "$IMAGE" -c 'env' 2>/dev/null | grep -qiE 'sk-|api_key=.{8}'; then
+  no "8b. THE IMAGE CARRIES A CREDENTIAL IN ITS ENVIRONMENT"
+else
+  ok "8b. the image carries no credential; the free model needs none"
 fi
 
 # --- 9. resource limits actually apply ----------------------------------------

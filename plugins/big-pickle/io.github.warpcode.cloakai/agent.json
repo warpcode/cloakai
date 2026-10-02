@@ -23,7 +23,7 @@
     "pids": 1024
   },
   "isolation": {
-    "network": "egress",
+    "network": null,
     "read_only": true,
     "tmpfs": [
       "/tmp",

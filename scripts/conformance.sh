@@ -34,7 +34,7 @@ no()  { printf '  \033[31m✗\033[0m %s\n' "$*"; fail=$((fail+1)); }
 sk()  { printf '  \033[33m–\033[0m %s\n' "$*"; skip=$((skip+1)); }
 
 if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
-  sk "no internal network '$NETWORK' — docker compose -f infra/compose.yml up -d"
+  sk "no network '$NETWORK' — docker network create $NETWORK"
   exit 0
 fi
 
@@ -51,11 +51,9 @@ fi
 
 # Only offer the live probe when the agent is actually up. Pointing it at a dead
 # endpoint would report a client failure for what is really a missing service.
-if [ -z "$MCP_URL" ]; then
-  if docker ps --format '{{.Names}}' | grep -q dev-agent; then
-    MCP_URL="http://dev-agent:8081/mcp"
-  fi
-fi
+# There is no compose service to probe any more, so a live tools/list only happens
+# when the caller names an endpoint. Everything else in this script — the real
+# client loading the generated plugin, the skill-name checks — still runs.
 
 # Order matters: every flag must precede the image name, or docker passes it to
 # the entrypoint as an argument. Appending `-e` after the image looked correct and

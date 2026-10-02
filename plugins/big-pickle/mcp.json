@@ -8,8 +8,6 @@
         "run",
         "--rm",
         "-i",
-        "--network",
-        "cloakai-egress",
         "cloakai/big-pickle:latest",
         "mcp"
       ]

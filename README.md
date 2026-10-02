@@ -41,19 +41,23 @@ cloakai prompt big-pickle "what is 1+1"
 It runs `opencode run --model opencode/big-pickle` inside a container and needs no
 key, because `opencode.ai/zen` serves that model without authentication.
 
-**It is on `cloakai-egress`, not `cloakai-internal`.** `dev` reaches a model through
-the LiteLLM proxy on the internal network; big-pickle talks to `opencode.ai/zen`
-directly, and `cloakai-internal` has no route out. On the wrong network it does not
-error — it hangs, which is why the network is declared per agent rather than
-assumed:
+Nothing needs to be running first. There is no proxy, no stack, and no managed
+network — the agent calls `opencode.ai/zen` directly, so it gets the default bridge.
 
-```json
-"isolation": { "network": "egress", "read_only": true, "tmpfs": [ ... ] }
-```
+Isolation is per-container and that is the whole of it:
 
-Everything else is unchanged: read-only rootfs, dropped capabilities, no workspace,
-`--rm`. Egress means it can reach the internet, so it is the one agent where "only
-litellm leaves the machine" does not hold.
+| | |
+|---|---|
+| read-only root filesystem | nothing persists; writes go only to tmpfs |
+| all capabilities dropped | `CapEff=0` |
+| no Docker socket | an agent cannot start a sibling container |
+| no host mounts | a default invocation sees none of your files |
+| resource limits | cpus, memory, pids |
+
+**The network is not isolated.** Agents reach the internet, because their model
+lives there. There is no `internal`/`egress` split and no single container holding
+the only route out. An agent that declares `"network"` in its `agent.json` is
+attached to the network you name; none do today.
 
 ### Two shapes
 
@@ -82,14 +86,15 @@ PYTHONPATH=. python3 -m cli.main doctor
 
 ```bash
 # one-time
-./scripts/build.sh                              # compile + build the agent image
-docker compose -f infra/compose.yml up -d       # the proxy and its credential store
+./scripts/build.sh            # compile, then build each agent image
 
 # daily
-PYTHONPATH=. python3 -m cli.main agents dev "review the diff on this branch"
-./scripts/test.sh                                 # compiler + isolation tests
-./scripts/install.sh                             # install the generated trees into clients
+cloakai prompt big-pickle "what is 1+1"
+cloakai agents
+./scripts/test.sh             # compiler, CLI, isolation
 ```
+
+There is no stack to start. Nothing needs to be running for any command here.
 
 ## Using an image directly
 
@@ -98,19 +103,17 @@ so every agent is usable with nothing else running:
 
 ```bash
 # the dev agent, as an MCP server over stdio
-docker run --rm -i --network cloakai-internal -e OPENAI_API_KEY cloakai/dev:latest mcp
+docker run --rm -i cloakai/dev:latest mcp
 ```
 
-That is a complete MCP server on stdio — no port, no network of ours beyond the
-internal one, no service to start first. Any MCP client can spawn it:
+That is a complete MCP server on stdio — no port, no service, nothing to start
+first. Any MCP client can spawn it:
 
 ```bash
-opencode mcp add cloakai -- docker run --rm -i --network cloakai-internal \
-  -e OPENAI_API_KEY cloakai/dev:latest mcp
+opencode mcp add cloakai -- docker run --rm -i cloakai/dev:latest mcp
 
 # agy needs -- because the args begin with -
-agy mcp add --env OPENAI_API_KEY cloakai -- docker run --rm -i \
-  --network cloakai-internal cloakai/dev:latest mcp
+agy mcp add cloakai -- docker run --rm -i cloakai/dev:latest mcp
 ```
 
 `./scripts/compile.sh` writes these entries into `clients/opencode.json` and agy's
@@ -169,7 +172,7 @@ marker in the timeline settles it.
 
 `scripts/test.sh` runs it. It caught nothing at first, and that is the point — the
 claim was verified by hand for several turns and by nothing automatic, which is
-how `mcp.json` came to point at a service that was never in compose while every
+how `mcp.json` came to point at a service that was never running while every
 test stayed green.
 
 `./scripts/compile.sh` and `./scripts/install.sh` need no Docker at all. A plugin is a
@@ -215,43 +218,43 @@ opt into the same directory **will** share it, and will overwrite each other's f
 than assumed — `scripts/isolation-tests.sh` test 5c mounts a workspace deliberately and confirms the
 sharing appears, so test 5 is not passing for an unrelated reason.
 
-The `dev-agent` compose service opts in by default, because `dev.sh shell` exists to poke at your
-project interactively. A spawned agent container gets no workspace unless it asks.
+If you want an agent to work on your files, opt in explicitly with
+`--workspace`. Nothing mounts anything by default.
 
 ## How this fits together
 
 ```
-                     ┌──────────────────────┐
-                     │      your host       │
-                     └──────────────────────┘
-        internal (no route off this machine)
+        your host
    ┌────────────────────────────────────────────────┐
    │                                                │
-   │   dev-agent ──► litellm ──┐                    │
-   │      │              │      │                    │
-   │      │          postgres    │                   │
-   │      │            (keys)    │                   │
-   │                        ┌────┘                   │
-   │                        ▼                         │
-   │                 (upstream: a model provider)     │
-   └────────────────────────┼────────────────────────┘
-                            │ only litellm is here
-        egress (default bridge)
+   │   cloakai agents / cloakai mcp                 │
+   │        │                                       │
+   │        ▼                                       │
+   │   ┌──────────────┐   docker run --rm           │
+   │   │ agent        │──────────────────────────┐  │
+   │   │ read-only fs │                          │  │
+   │   │ no caps      │   reaches the model      │  │
+   │   │ no socket    │──────────────────────────┘  │
+   │   │ no mounts    │                             │
+   │   └──────────────┘        container destroyed │
+   │                               when it exits   │
+   └────────────────────────────────────────────────┘
+                            │
                             ▼
-                        the internet
+                 opencode.ai/zen  (or any endpoint
+                                     the agent names)
 ```
 
-| Container | Networks | Capability |
-|---|---|---|
-| `dev-agent` | `internal` | Your project directory, and the proxy. Nothing else. |
-| `litellm` | `internal` + `egress` | The only route off this machine. Holds provider credentials. |
-| `postgres` | `internal` | The credential store. Cannot reach the internet, deliberately. |
-| `mock-upstream` | `egress` | Test profile only — stands in for a model provider. |
+There is no proxy and no network split. An agent container reaches the endpoint its
+`agent.json` names, and is destroyed when it exits. The guarantees are all
+per-container: read-only root filesystem, no capabilities, no Docker socket, no host
+mounts, resource limits.
 
-**Who can leave the machine: only `litellm`.** That is the whole point. A container reaches the
-internet by being on `egress`, and only `litellm` is. To give the agent a new capability — web
-fetch, say — add a container on `internal` *and* `egress` that serves exactly that tool. Do not add a
-second network; adding a container to the existing two is the entire extension mechanism.
+**The network is the one thing that is not isolated.** A prompt injection can reach
+the internet, because the model is there. If that becomes a problem, an agent that
+declares `"network"` in its `agent.json` is attached to the network you name, and you
+create that network with `docker network create --internal ...`. Nothing in the code
+assumes a boundary that is not declared.
 
 ### There is no gateway, and that is the design
 
@@ -260,7 +263,7 @@ call — but it turned out to be unnecessary, because an image already speaks MC
 client can spawn it directly:
 
 ```bash
-docker run --rm -i --network cloakai-internal -e OPENAI_API_KEY cloakai/dev:latest mcp
+docker run --rm -i cloakai/dev:latest mcp
 ```
 
 That removes the reason the gateway existed: there is nothing left for it to mediate. Its measured
@@ -303,9 +306,9 @@ nowhere else. If you need to poke at it, publish to `127.0.0.1` and remove it af
 ### Two ways to run the agent, and they cannot drift
 
 `agents/isolation-flags` is the source of truth for `docker run`. Compose cannot read a file, so
-`infra/compose.yml` states the same flags in YAML. `scripts/check-isolation-parity.sh` fails if they
+`scripts/check-isolation-parity.sh` fails if the generated catalogue and this file
 disagree, and `scripts/dev.sh test` runs it. Without that guard, a change to one could leave the
-compose-managed container — the one a supervisor actually keeps alive — quietly less isolated than the
+spawned agent — the one a client actually runs — quietly less isolated than the
 one you tested.
 
 ### The isolation flags live in one file
@@ -333,21 +336,24 @@ compiler/cloakai_compiler/
 └── tests/                                52 tests
 
 agents/                                   the container
-├── dev.Dockerfile                        two modes off one image
-├── cloakai-entrypoint.sh                 run | mcp | shell
-└── isolation-flags                       shared by run.sh AND the isolation tests
+├── dev.Dockerfile                        code review and release notes
+├── big-pickle.Dockerfile                 the free model, no credential
+├── jules.Dockerfile                      Jules as MCP over stdio
+├── cloakai-entrypoint.sh                 run-cmd | mcp | mcp-http | shell
+├── isolation-flags                       shared by run.sh AND the isolation tests
+└── jules-mcp/                            the Jules adapter: client, server, verdict
 
-infra/
-├── compose.yml                           internal + egress networks, proxy, credential store
-├── litellm.yaml                          virtual keys with per-key budgets
-└── mock-upstream.py                      test profile only, so test 8 needs no provider key
+cli/                                      the `cloakai` command
+├── registry.py                           catalogue, argv, lifecycle
+└── main.py                               agents | prompt | mcp | show | doctor
+
+infra/conformance/                        real-client conformance harness
 
 schemas/                                  vendored JSON Schemas, never fetched at load time
 dist/                                     GENERATED, committed (see #16 for moving it to CI)
 clients/                                  GENERATED config files
 docs/verification/phase-0.md              what was verified, and what disproved an assumption
-docs/phase-1.md                           Phase 1 results
-docs/phase-2.md                           Phase 2 results
+docs/phase-1.md .. phase-3.md             phase results, historical
 ```
 
 ## The four rules

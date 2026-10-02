@@ -7,9 +7,9 @@
   "runtime": "opencode",
   "image": "cloakai/dev:latest",
   "upstream": {
-    "provider": "openai",
-    "id": "default",
-    "base_url": "http://litellm:4000/v1"
+    "provider": "opencode",
+    "id": "big-pickle",
+    "base_url": "https://opencode.ai/zen/v1"
   },
   "entrypoints": {
     "run": "opencode run --auto",
@@ -23,7 +23,7 @@
     "pids": 1024
   },
   "isolation": {
-    "network": "internal",
+    "network": null,
     "read_only": true,
     "tmpfs": [
       "/tmp",
@@ -38,10 +38,5 @@
   },
   "mcp_servers": [
     "agents"
-  ],
-  "env": {
-    "OPENCODE_API_KEY": "{{key}}",
-    "OPENCODE_DISABLE_MODELS_FETCH": "1",
-    "OPENCODE_CONFIG_CONTENT": "{\"model\":\"cloakai/{{model}}\",\"provider\":{\"cloakai\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"cloakai proxy\",\"options\":{\"baseURL\":\"{{base_url}}\",\"apiKey\":\"{{key}}\"},\"models\":{\"{{model}}\":{\"name\":\"{{model}}\"}}}},\"permission\":{\"edit\":\"allow\",\"bash\":\"allow\"}}"
-  }
+  ]
 }

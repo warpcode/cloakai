@@ -13,8 +13,8 @@ version: "16"
 models:
   proxy-model:
     provider: openai
-    model: "default"
-    base_url: "http://litellm:4000/v1"
+    model: "big-pickle"
+    base_url: "https://opencode.ai/zen/v1"
 agents:
   "dev":
     description: "Development agent. Reviews changes for correctness, security and maintainability, and writes release notes from a diff. Use for code review, pull request feedback, and preparing a release summary."

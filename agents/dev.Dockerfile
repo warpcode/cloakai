@@ -40,7 +40,13 @@ RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path \
 ENV XDG_DATA_HOME=/root/.local/share \
     XDG_CONFIG_HOME=/root/.config \
     XDG_CACHE_HOME=/root/.cache \
-    OPENCODE_DISABLE_AUTOUPDATE=1
+    OPENCODE_DISABLE_AUTOUPDATE=1 \
+    # Without this opencode tries to fetch the model list at startup. Under
+    # --read-only it cannot cache the response, and the MCP server exits before it
+    # binds, so the client sees "Connection closed" with nothing on stderr. It was
+    # in agent.json's env and went when the proxy env went; it belongs in the image,
+    # because it is a property of running opencode read-only, not of the caller.
+    OPENCODE_DISABLE_MODELS_FETCH=1
 
 # The compiled plugin. This is what clients consume. PLUGIN is a build arg so
 # `PLUGIN=custom ./scripts/build.sh` builds that plugin's tree rather than

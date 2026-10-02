@@ -10,8 +10,6 @@
         "mcp": "docker-agent serve mcp /agent/agent.yaml -a big-pickle"
       },
       "flags": [
-        "--network",
-        "NETWORK_PLACEHOLDER",
         "--read-only",
         "--tmpfs",
         "/tmp",
@@ -27,7 +25,7 @@
         "--memory=4g",
         "--cpus=2"
       ],
-      "network": "egress",
+      "network": null,
       "env": {},
       "model": "big-pickle",
       "base_url": "https://opencode.ai/zen/v1"
@@ -40,8 +38,6 @@
         "mcp": "docker-agent serve mcp /agent/agent.yaml -a dev"
       },
       "flags": [
-        "--network",
-        "NETWORK_PLACEHOLDER",
         "--read-only",
         "--tmpfs",
         "/tmp",
@@ -57,14 +53,10 @@
         "--memory=4g",
         "--cpus=2"
       ],
-      "network": "internal",
-      "env": {
-        "OPENCODE_API_KEY": "{{key}}",
-        "OPENCODE_DISABLE_MODELS_FETCH": "1",
-        "OPENCODE_CONFIG_CONTENT": "{\"model\":\"cloakai/{{model}}\",\"provider\":{\"cloakai\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"cloakai proxy\",\"options\":{\"baseURL\":\"{{base_url}}\",\"apiKey\":\"{{key}}\"},\"models\":{\"{{model}}\":{\"name\":\"{{model}}\"}}}},\"permission\":{\"edit\":\"allow\",\"bash\":\"allow\"}}"
-      },
-      "model": "default",
-      "base_url": "http://litellm:4000/v1"
+      "network": null,
+      "env": {},
+      "model": "big-pickle",
+      "base_url": "https://opencode.ai/zen/v1"
     }
   }
 }

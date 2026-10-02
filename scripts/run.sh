@@ -49,7 +49,7 @@ Falling back to the default bridge would give the agent full internet access,
 so this stops instead.
 
 Create it with:  docker network create --internal $NETWORK
-Or bring up the whole topology:  docker compose -f infra/compose.yml up -d
+
 EOF
   exit 1
 fi
@@ -75,7 +75,7 @@ while IFS= read -r line; do
   # file line-at-a-time into an array would pass it as a single bogus argument and
   # silently drop the whole flag set — which is exactly what happened once.
   for word in $line; do
-    FLAGS+=("${word//NETWORK_PLACEHOLDER/$NETWORK}")
+    FLAGS+=("$word")
   done
 done < agents/isolation-flags
 
@@ -97,47 +97,20 @@ fi
 # A caller-supplied OPENCODE_CONFIG_CONTENT always wins. Otherwise we mint a
 # scoped virtual key here, exactly as the isolation tests do, and point the
 # harness at the proxy. The agent never sees a provider credential.
-CONFIG_ARGS=()
+# No key is minted and no proxy is configured. There is no proxy: the agent calls
+# the endpoint its agent.json names, and the free model needs no credential.
+#
+# The previous version minted a budgeted virtual key from LiteLLM and injected
+# OPENCODE_CONFIG_CONTENT. That was a real credential-scoping story and it is gone
+# with the stack. An agent that DOES need a credential gets it from the caller's
+# environment, forwarded by name so no value lands in argv where `ps` can read it.
 if [ -n "${OPENCODE_CONFIG_CONTENT:-}" ]; then
   CONFIG_ARGS=(-e "OPENCODE_CONFIG_CONTENT=$OPENCODE_CONFIG_CONTENT")
   if [ -n "${OPENCODE_API_KEY:-}" ]; then
     CONFIG_ARGS+=(-e "OPENCODE_API_KEY=$OPENCODE_API_KEY")
   fi
 else
-  VK=""
-  if docker ps --format '{{.Names}}' | grep -q litellm; then
-    VK=$(docker run --rm --network "$NETWORK" curlimages/curl:latest -s \
-           -X POST http://litellm:4000/key/generate \
-           -H 'Content-Type: application/json' \
-           -H "Authorization: Bearer ${LITELLM_MASTER_KEY:-sk-cloakai-dev-not-a-secret}" \
-           -d "{\"models\":[\"default\"],\"max_budget\":${CLOAKAI_BUDGET:-1.00},\"budget_duration\":\"24h\",\"key_alias\":\"run-$$-$(date +%s)\"}" \
-           2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])" 2>/dev/null || true)
-  fi
-
-  if [ -n "$VK" ]; then
-    CONFIG_ARGS=(-e "OPENCODE_API_KEY=$VK" -e "OPENCODE_DISABLE_MODELS_FETCH=1")
-    CONFIG_ARGS+=(-e "OPENCODE_CONFIG_CONTENT=$(CLOAKAI_VK="$VK" python3 -c '
-import json, os
-print(json.dumps({
-    "model": "cloakai/default",
-    "provider": {"cloakai": {
-        "npm": "@ai-sdk/openai-compatible",
-        "name": "cloakai proxy",
-        "options": {"baseURL": "http://litellm:4000/v1", "apiKey": os.environ["CLOAKAI_VK"]},
-        "models": {"default": {"name": "default"}},
-    }},
-    "permission": {"edit": "allow", "bash": "allow"},
-}))')")
-    echo "using a scoped virtual key from the proxy (max ${CLOAKAI_BUDGET:-1.00}/24h)" >&2
-  else
-    echo "warning: the proxy is not running, so no scoped key could be minted." >&2
-    echo "         The agent will have no model endpoint — the container cannot" >&2
-    echo "         reach the internet to find one. Start it with:" >&2
-    echo "           docker compose -f $ROOT/infra/compose.yml up -d" >&2
-    # An explicitly empty config is better than a half-formed one: it fails
-    # immediately and legibly rather than hanging on a discovery request.
-    CONFIG_ARGS=(-e "OPENCODE_CONFIG_CONTENT={}")
-  fi
+  CONFIG_ARGS=(-e "OPENCODE_DISABLE_MODELS_FETCH=1")
 fi
 
 # The mount is added only when a workspace was requested. It is never on by

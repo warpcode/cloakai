@@ -40,12 +40,12 @@ SPEC = {
         "run": "opencode run --auto",
         "mcp": "docker-agent serve mcp /agent/agent.yaml -a dev",
     },
+    "network": None,
     "flags": [
-        "--network", "NETWORK_PLACEHOLDER",
         "--read-only", "--tmpfs", "/tmp", "--cap-drop=ALL",
         "--security-opt=no-new-privileges", "--pids-limit=1024",
     ],
-    "env": {"OPENAI_API_KEY": "{{key}}"},
+    "env": {"OPENAI_API_KEY": "from-operator-environment"},
     "model": "default",
     "base_url": "http://litellm:4000/v1",
 }
@@ -125,59 +125,26 @@ class ShapeMapping(unittest.TestCase):
 class Isolation(unittest.TestCase):
     def test_catalog_flags_reach_the_command_line_verbatim(self):
         for flag in SPEC["flags"]:
-            if flag == "NETWORK_PLACEHOLDER":
-                continue
             self.assertIn(flag, argv(), f"{flag} was dropped")
 
-    def test_network_placeholder_is_resolved(self):
-        # Emitting the placeholder unresolved made every call name a network that
-        # does not exist; emitting `internal` named the compose SERVICE alias.
-        self.assertNotIn("NETWORK_PLACEHOLDER", argv())
-        self.assertIn("cloakai-internal", argv())
+    def test_no_network_flag_when_none_is_declared(self):
+        # Passing --network for a network that does not exist makes docker fail
+        # naming a network the user never asked for. There is no cloakai-managed
+        # network any more, so the default must be "attach nothing".
+        spec = json.loads(json.dumps(SPEC))
+        spec["network"] = None
+        flags = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="x")
+        self.assertNotIn("--network", flags,
+                         f"a default invocation must name no network: {flags}")
 
-    def test_declared_network_selects_the_right_one(self):
-        # An agent declares "internal" or "egress" and the CLI maps it to a real
-        # Docker network name. Getting this wrong silently produces a container
-        # that cannot reach its model: cloakai-internal has no egress, so
-        # big-pickle hung there with no error at all.
-        egress = json.loads(json.dumps(SPEC))
-        egress["network"] = "egress"
-        flags = reg.build_argv({"agents": {"dev": egress}}, "dev", "agents", prompt="x")
-        self.assertIn("cloakai-egress", flags)
-        self.assertNotIn("cloakai-internal", flags)
-
-    def test_internal_network_override_still_applies(self):
-        import os
-        os.environ["CLOAKAI_NETWORK"] = "my-internal"
-        try:
-            spec = json.loads(json.dumps(SPEC))
-            spec["network"] = "internal"
-            flags = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="x")
-            self.assertIn("my-internal", flags)
-        finally:
-            del os.environ["CLOAKAI_NETWORK"]
-
-    def test_egress_is_not_overridable_by_the_internal_variable(self):
-        # CLOAKAI_NETWORK renames the internal network. If it also renamed egress,
-        # an operator could point an agent at a network with no internet and get a
-        # hang rather than an error.
-        import os
-        os.environ["CLOAKAI_NETWORK"] = "my-internal"
-        try:
-            spec = json.loads(json.dumps(SPEC))
-            spec["network"] = "egress"
-            flags = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="x")
-            self.assertIn("cloakai-egress", flags)
-        finally:
-            del os.environ["CLOAKAI_NETWORK"]
-
-    def test_network_override_is_honoured(self):
-        import os
-        os.environ["CLOAKAI_NETWORK"] = "other-net"
-        try:
-            self.assertIn("other-net", argv())
-        finally:
-            del os.environ["CLOAKAI_NETWORK"]
+    def test_declared_network_is_passed_through(self):
+        # An agent that needs a specific network says so in agent.json and the CLI
+        # attaches it. The name is used verbatim: there is no mapping layer left.
+        spec = json.loads(json.dumps(SPEC))
+        spec["network"] = "some-net"
+        flags = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="x")
+        self.assertIn("--network", flags)
+        self.assertEqual(flags[flags.index("--network") + 1], "some-net")
 
     def test_no_host_mount_in_either_shape(self):
         for shape in ("agents", "mcp"):
@@ -241,30 +208,40 @@ class PromptSafety(unittest.TestCase):
 
     def test_prompt_cannot_smuggle_an_env_var(self):
         line = argv("agents", "OPENAI_API_KEY=attacker")
-        self.assertEqual(line[-1], "OPENAI_API_KEY=attacker")
-        self.assertNotIn("--env", line, "no env without a minted key")
+        self.assertEqual(line[-1], "OPENAI_API_KEY=attacker",
+                         "the prompt is still the prompt")
+        # The agent's own env may legitimately produce --env, so assert on the
+        # VALUE not appearing as a variable, not on --env being absent.
+        self.assertNotIn("OPENAI_API_KEY=attacker", line[:-1],
+                         "the prompt leaked into an --env assignment")
 
-    def test_env_only_appears_with_a_key_and_is_fully_substituted(self):
-        line = reg.build_argv(ONE, "dev", "agents", prompt="x", key="vk-123")
-        self.assertIn("OPENAI_API_KEY=vk-123", line)
-        self.assertNotIn("{{", line, "an unsubstituted placeholder reached the container")
-
-    def test_all_three_placeholders_substitute(self):
+    def test_env_placeholders_substitute(self):
         spec = json.loads(json.dumps(SPEC))
-        spec["env"] = {"A": "{{key}}", "B": "{{base_url}}", "C": "{{model}}"}
-        line = reg.build_argv(
-            {"agents": {"dev": spec}}, "dev", "agents", prompt="x", key="k",
-        )
-        self.assertIn("A=k", line)
+        spec["env"] = {"B": "{{base_url}}", "C": "{{model}}"}
+        line = reg.build_argv({"agents": {"dev": spec}}, "dev", "agents", prompt="x")
         self.assertIn("B=http://litellm:4000/v1", line)
         self.assertIn("C=default", line)
+        self.assertNotIn("{{", line,
+                         "an unsubstituted placeholder reached the container")
+
+    def test_cli_never_embeds_a_credential_in_argv(self):
+        """No proxy means no minted key, and none is invented either.
+
+        A value in argv is readable by `ps` and lands in shell history. `--env NAME`
+        forwards the operator's own variable by name instead, so the secret never
+        appears in a command line.
+        """
+        for shape in ("agents", "mcp"):
+            line = argv(shape)
+            self.assertFalse(
+                [a for a in line if a.startswith("-e") and "=" in a],
+                f"{shape} embeds a value in argv: {line}",
+            )
 
     def test_non_opencode_env_passes_through_untouched(self):
-        # The CLI substitutes three tokens and knows nothing else, which is what
-        # lets a Jules-style agent bring its own variables.
         spec = json.loads(json.dumps(SPEC))
-        spec["env"] = {"JULES_API_KEY": "{{key}}", "HTTP_PROXY": "socks5://x:1080"}
-        line = reg.build_argv({"agents": {"dev": spec}}, "dev", "mcp", key="k")
+        spec["env"] = {"HTTP_PROXY": "socks5://x:1080"}
+        line = reg.build_argv({"agents": {"dev": spec}}, "dev", "mcp")
         self.assertIn("HTTP_PROXY=socks5://x:1080", line)
 
 
@@ -351,8 +328,7 @@ class RealCatalog(unittest.TestCase):
         IMAGE, the same NETWORK, and no secret in the file.
         """
         doc = reg.load(CATALOG)
-        for plugin, net in (("dev", "cloakai-internal"),
-                            ("big-pickle", "cloakai-egress")):
+        for plugin in ("dev", "big-pickle"):
             source = REPO / "plugins" / plugin / "mcp.json"
             self.assertTrue(source.exists(), f"{plugin}/mcp.json is missing")
             spec = reg.agents(doc)[plugin]
@@ -362,10 +338,11 @@ class RealCatalog(unittest.TestCase):
                 self.assertIn(spec["image"], entry["args"],
                               f"{plugin}/{server} runs a different image than the catalogue")
                 self.assertEqual(entry["args"][-1], "mcp")
-                # The network is the one flag the plugin entry carries today.
-                self.assertIn(net, entry["args"],
-                              f"{plugin}/{server} must use {net}")
-                self.assertEqual(reg.network(spec.get("network")), net)
+                # No cloakai-managed network exists any more, so the plugin entry
+                # must not name one that is not there.
+                for dead in ("cloakai-internal", "cloakai-egress", "cloakai_egress"):
+                    self.assertNotIn(dead, entry["args"],
+                                     f"{plugin}/{server} names a network that does not exist")
 
     def test_plugin_clients_are_less_isolated_than_the_cli(self):
         """Records the gap, so closing it is a deliberate change.

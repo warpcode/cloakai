@@ -71,7 +71,7 @@ head_ "cli"
 if timeout 600 python3 -m cli.main prompt big-pickle "what is 1+1? Answer with only the number." 2>/dev/null | grep -qE '^2[[:space:]]*$'; then
   ok "big-pickle answers 1+1 correctly, from the real model"
 else
-  no "big-pickle did not answer 1+1 correctly (is the image built? is cloakai-egress up?)"
+  no "big-pickle did not answer 1+1 correctly (is the image built?)"
 fi
 
 if timeout 600 python3 -m cli.main prompt big-pickle "What is the capital of Japan? Answer with only the city." 2>/dev/null | grep -qi 'tokyo'; then
@@ -109,6 +109,14 @@ else
   PYTHONPATH="$ROOT/compiler" python3 -m unittest discover -s compiler/tests 2>&1 | tail -20
 fi
 
+# ------------------------------------------------------------- isolation parity
+head_ "isolation parity"
+if ./scripts/check-isolation-parity.sh; then
+  ok "agent.json, the flag file and the generated catalogue agree"
+else
+  no "the declared isolation differs between agent.json, the flag file and the catalogue"
+fi
+
 # ---------------------------------------------------------------- determinism
 head_ "determinism"
 # The agent list, so a compile that silently DROPS an agent cannot pass. The glob
@@ -141,6 +149,9 @@ if ./scripts/compile.sh --quiet 2>/dev/null; then
 else
   no "compile failed"
 fi
+
+# The client-conformance layer needs the compose stack (it reaches dev-agent:8081),
+# which no longer exists. Reinstated when there is a stack to reach.
 
 # ---------------------------------------------------------------- reaper
 # The leak guard for per-call containers. Nothing creates cloakai.call=1 containers
@@ -250,7 +261,7 @@ else
 fi
 
 # tools/list requires the gateway, which does not exist until Phase 2/3.
-sk "MCP tools/list against the compose service: superseded — clients spawn the image over stdio instead (see scripts/check-direct-use.sh)"
+sk "MCP tools/list against a served endpoint: superseded — clients spawn the image over stdio instead (see scripts/check-direct-use.sh)"
 sk "VS Code skill listing: needs a GUI session; verify manually"
 
 # ---------------------------------------------------------------- isolation
@@ -261,8 +272,6 @@ sk "VS Code skill listing: needs a GUI session; verify manually"
 head_ "container isolation"
 if [ "${SKIP_ISOLATION:-0}" = "1" ]; then
   sk "skipped via SKIP_ISOLATION=1"
-elif ! docker network inspect "${CLOAKAI_NETWORK:-cloakai-internal}" >/dev/null 2>&1; then
-  sk "network '${CLOAKAI_NETWORK:-cloakai-internal}' does not exist — run: docker compose -f infra/compose.yml up -d"
 elif ! docker image inspect "${IMAGE:-cloakai/dev}" >/dev/null 2>&1; then
   sk "image '${IMAGE:-cloakai/dev}' not built — run ./scripts/build.sh"
 else

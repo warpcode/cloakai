@@ -63,9 +63,13 @@ docker image inspect "$HARNESS" >/dev/null 2>&1 || {
 
 # ---------------------------------------------------------------- dev image
 echo "  dev image over stdio, no gateway"
+# The repo is mounted because tests/direct_use.py now builds its command line with
+# the CLI rather than hardcoding one — a test that assembles its own docker argv
+# can silently disagree with the product.
 out=$(timeout 300 docker run --rm --entrypoint python \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        -e CLOAKAI_NETWORK="$NETWORK" \
+        -v "$ROOT:/srv:ro" \
+        -e REPO=/srv \
         "$HARNESS" -m tests.direct_use 2>&1)
 
 if grep -q "PASS: the image is a working MCP server" <<<"$out"; then

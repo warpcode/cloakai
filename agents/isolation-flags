@@ -13,8 +13,10 @@
 # and reading the next failure — see docs/verification/phase-0.md Check 3. None is
 # cargo-cult. If you add a flag, add the reason.
 #
-#   --network      comes from the caller (cloakai-internal). There is no fallback:
-#                  an accidental default-bridge attachment is an open container.
+#   --network      NOT here. There is no cloakai-managed network any more, and an
+#                  agent only gets one if its agent.json declares it. An accidental
+#                  attachment is an open container, so the network is an explicit
+#                  per-agent choice rather than a global default.
 #
 #   --read-only    the root filesystem is the isolation boundary.
 #
@@ -36,7 +38,6 @@
 #     any second bind mount  the project directory is the one intentional
 #                             exception, scoped by choice and discipline, not by
 #                             anything the spec enforces.
---network NETWORK_PLACEHOLDER
 --read-only
 --tmpfs /tmp
 --tmpfs /root/.local

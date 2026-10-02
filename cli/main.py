@@ -24,6 +24,7 @@ something to hold it, and nothing here does that on purpose.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -66,8 +67,8 @@ def _run_agents(args: argparse.Namespace) -> int:
     prompt = " ".join(args.prompt).strip()
     code = reg.run_agents(
         doc, args.name, prompt,
-        budget=args.budget, timeout=args.timeout,
-        passthrough_key=args.key,
+        timeout=args.timeout,
+        env={v: os.environ[v] for v in (args.env or []) if v in os.environ},
     )
     return EXIT_OK if code == 0 else (code if code not in (0,) else EXIT_FAILED)
 
@@ -79,7 +80,10 @@ def _cmd_prompt(args: argparse.Namespace) -> int:
 
 def _cmd_mcp(args: argparse.Namespace) -> int:
     doc = reg.load(args.catalog)
-    return reg.run_mcp(doc, args.name, passthrough_key=args.key)
+    return reg.run_mcp(
+        doc, args.name,
+        env={v: os.environ[v] for v in (args.env or []) if v in os.environ},
+    )
 
 
 def _cmd_show(args: argparse.Namespace) -> int:
@@ -119,29 +123,17 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         for name in reg.names(doc):
             spec = reg.agents(doc)[name]
             image = spec.get("image", "")
-            declared = spec.get("network", "internal")
-            net = reg.network(declared)
+            net = reg.network(spec.get("network"))
             if not reg.image_exists(image):
                 print(f"  {name:<12} MISSING image {image}")
                 problems.append(f"image:{name}")
                 continue
-            try:
-                reg.docker_network_inspect(net)
-            except Exception:
-                extra = (" — docker network create --internal "
-                         if declared == "internal" else
-                         " — it needs internet for its model; create it with "
-                         "docker network create ")
-                print(f"  {name:<12} MISSING network {net}{extra}")
+            if net and not reg.network_exists(net):
+                print(f"  {name:<12} MISSING network {net} — docker network create {net}")
                 problems.append(f"network:{name}")
                 continue
-            print(f"  {name:<12} ok  {image} on {net}")
-
-    if reg.proxy_running():
-        print("proxy       ok   litellm is up")
-    else:
-        print("proxy       MISSING docker compose -f infra/compose.yml up -d")
-        problems.append("proxy")
+            where = net or "default bridge"
+            print(f"  {name:<12} ok  {image} on {where}")
 
     if problems:
         print(f"\n{len(problems)} problem(s): {', '.join(problems)}")
@@ -165,10 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     agents.add_argument(
         "prompt", nargs="*", help="the task; everything after the name is used",
     )
-    agents.add_argument("--budget", default="1.00", help="proxy spend cap for this call")
     agents.add_argument("--timeout", type=int, default=reg.DEFAULT_TIMEOUT)
     agents.add_argument("--json", action="store_true", help="emit JSON when listing")
-    agents.add_argument("--key", help="use this key instead of minting one")
+    agents.add_argument(
+        "--env", action="append", metavar="VAR",
+        help="forward VAR from your environment into the container; repeatable",
+    )
     agents.set_defaults(func=_cmd_agents)
 
     # `prompt` is the short verb for the ephemeral shape. It is not a third shape
@@ -179,14 +173,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prompt.add_argument("name")
     prompt.add_argument("prompt", nargs="*")
-    prompt.add_argument("--budget", default="1.00", help="ignored by agents needing no key")
     prompt.add_argument("--timeout", type=int, default=reg.DEFAULT_TIMEOUT)
-    prompt.add_argument("--key")
+    prompt.add_argument(
+        "--env", action="append", metavar="VAR",
+        help="forward VAR from your environment into the container; repeatable",
+    )
     prompt.set_defaults(func=_cmd_prompt)
 
     mcp = sub.add_parser("mcp", help="serve an agent as a stdio MCP server")
     mcp.add_argument("name", help="agent to serve")
-    mcp.add_argument("--key", help="use this key instead of minting one")
+    mcp.add_argument(
+        "--env", action="append", metavar="VAR",
+        help="forward VAR from your environment into the container; repeatable",
+    )
     mcp.set_defaults(func=_cmd_mcp)
 
     show = sub.add_parser("show", help="print one agent's catalogue entry as JSON")

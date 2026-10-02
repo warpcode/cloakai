@@ -8,10 +8,6 @@
         "run",
         "--rm",
         "-i",
-        "--network",
-        "cloakai-internal",
-        "-e",
-        "OPENAI_API_KEY",
         "cloakai/dev:latest",
         "mcp"
       ],

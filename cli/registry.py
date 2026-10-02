@@ -32,11 +32,6 @@ from typing import Any
 
 DEFAULT_CATALOG = Path(__file__).resolve().parent.parent / "dist" / "agents.json"
 
-#: Sentinel for the caller-chosen Docker network name, shared with
-#: agents/isolation-flags, scripts/run.sh and the isolation tests.
-NETWORK_PLACEHOLDER = "NETWORK_PLACEHOLDER"
-DEFAULT_NETWORK = "cloakai-internal"
-
 #: Longest an ephemeral run may take before the caller stops waiting.
 DEFAULT_TIMEOUT = 900
 
@@ -101,48 +96,39 @@ def get(doc: dict[str, Any], name: str) -> dict[str, Any]:
     return spec
 
 
-#: Cloakai network -> the two real Docker network names. An agent declares
-#: "internal" or "egress"; the actual names are stack naming, not agent policy, so
-#: the mapping lives here rather than in any agent.json.
-NETWORKS = {
-    "internal": "cloakai-internal",
-    "egress": "cloakai-egress",
-}
+def network(declared: str | None = None) -> str | None:
+    """The Docker network to attach, or None for the default bridge.
 
+    There is no cloakai-managed network any more. An agent that needs a specific
+    one says so in agent.json and the caller creates it; an agent that does not,
+    gets the default bridge, which has egress and needs nothing set up.
 
-def network(declared: str | None = None) -> str:
-    """The Docker network for an agent that declared one.
-
-    CLOAKAI_NETWORK still wins, but only for the internal network: that is the one
-    an operator renames to match their own stack. Egress is structural — an agent
-    that needs the internet is on the network that has it — so overriding it would
-    silently produce a container that cannot reach its model.
+    Returning None is deliberate: passing `--network` for a network that does not
+    exist makes docker fail with an error that names a network the user never
+    asked for.
     """
-    if declared == "egress":
-        return os.environ.get("CLOAKAI_EGRESS_NETWORK") or NETWORKS["egress"]
-    return os.environ.get("CLOAKAI_NETWORK") or NETWORKS["internal"]
+    return declared or None
 
 
 def resolve_flags(spec: dict[str, Any]) -> list[str]:
-    """The agent's declared flags, with only the network sentinel resolved."""
-    return [
-        str(flag).replace(NETWORK_PLACEHOLDER, network(spec.get("network")))
-        for flag in spec.get("flags", [])
-    ]
+    """The agent's declared isolation flags, verbatim.
 
-
-def build_env(spec: dict[str, Any], key: str | None) -> list[str]:
-    """The agent's own env, with {{key}}/{{base_url}}/{{model}} substituted.
-
-    Three placeholders, no more. The CLI does not know what any variable means,
-    which is what lets a non-opencode agent bring its own without a code change
-    here.
+    The network is NOT here. It is attached separately by build_argv, and only when
+    the agent declares one, so a default invocation names no network at all.
     """
-    if not key:
-        return []
+    return [str(flag) for flag in spec.get("flags", [])]
+
+
+def build_env(spec: dict[str, Any]) -> list[str]:
+    """The agent's own env, with {{base_url}} and {{model}} substituted.
+
+    Two placeholders. {{key}} is gone with the proxy: an agent either needs no
+    credential, or the operator supplies one through the environment. The CLI
+    never invents a credential, which is what keeps a caller's call from spending
+    someone else's budget.
+    """
     replacements = {
-        "{{key}}": key,
-        "{{base_url}}": spec.get("base_url") or "http://litellm:4000/v1",
+        "{{base_url}}": spec.get("base_url") or "",
         "{{model}}": spec.get("model") or "default",
     }
     out: list[str] = []
@@ -154,50 +140,12 @@ def build_env(spec: dict[str, Any], key: str | None) -> list[str]:
     return out
 
 
-def mint_key(
-    budget: str = "1.00",
-    master: str | None = None,
-) -> str | None:
-    """Ask the proxy for a virtual key scoped to this one call.
-
-    Minted here, never taken from the caller. A caller-supplied key would let one
-    call spend another's budget, and the whole point of the proxy is that the
-    container holds no real provider credential.
-
-    Returns None if the proxy is not reachable, so the caller can decide whether to
-    continue rather than dying on an exception.
-    """
-    master = master or os.environ.get(
-        "LITELLM_MASTER_KEY", "sk-cloakai-dev-not-a-secret"
-    )
-    payload = json.dumps({
-        "models": ["default"],
-        "max_budget": budget,
-        "budget_duration": "24h",
-        "key_alias": f"cli-{uuid.uuid4().hex[:12]}",
-    })
-    try:
-        done = subprocess.run(
-            ["docker", "run", "--rm", "--network", network(),
-             "curlimages/curl:latest", "-s", "-X", "POST",
-             "http://litellm:4000/key/generate",
-             "-H", "Content-Type: application/json",
-             "-H", f"Authorization: Bearer {master}",
-             "-d", payload],
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        return json.loads(done.stdout)["key"]
-    except (subprocess.SubprocessError, json.JSONDecodeError, KeyError, IndexError):
-        return None
-
-
 def build_argv(
     doc: dict[str, Any],
     name: str,
     shape: str,
     *,
     prompt: str | None = None,
-    key: str | None = None,
     call_id: str | None = None,
     started: int | None = None,
     interactive: bool = True,
@@ -264,13 +212,17 @@ def build_argv(
     # -i keeps stdin open, which the mcp shape needs to stay alive at all.
     if interactive:
         argv.append("-i")
+    net = network(spec.get("network"))
+    if net:
+        argv += ["--network", net]
+
     argv += [
         "--name", f"cloakai-{shape}-{call_id}",
         "--label", "cloakai.call=1",
         "--label", f"cloakai.started={started}",
         "--label", f"cloakai.instance={name}",
         *resolve_flags(spec),
-        *build_env(spec, key),
+        *build_env(spec),
         image,
         mode,
     ]
@@ -290,9 +242,8 @@ def run_agents(
     name: str,
     prompt: str,
     *,
-    budget: str = "1.00",
     timeout: int = DEFAULT_TIMEOUT,
-    passthrough_key: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> int:
     """Ephemeral: one task, then the container is gone.
 
@@ -301,19 +252,13 @@ def run_agents(
     if not prompt or not prompt.strip():
         raise CliError("a prompt is required: cloakai agents <name> \"prompt\"")
 
-    spec = get(doc, name)
-    key = passthrough_key or mint_key(budget=budget)
-    needs_key = bool(spec.get("env"))
-    if key is None and needs_key:
-        print(
-            f"error: the model proxy did not answer, so no key could be minted and\n"
-            f"       '{name}' has no model endpoint. Is the stack up?\n"
-            f"         docker compose -f infra/compose.yml up -d",
-            file=sys.stderr,
-        )
-        return 2
-
-    argv = build_argv(doc, name, "agents", prompt=prompt, key=key)
+    get(doc, name)
+    argv = build_argv(doc, name, "agents", prompt=prompt)
+    # Caller-supplied environment, and ONLY that. `--env FOO=$FOO` forwards from
+    # the caller's own environment rather than embedding a value in a command line
+    # that ends up in `ps` and shell history.
+    for var in sorted(env or os.environ if env is None else env):
+        argv += ["--env", f"{var}={env[var]}"] if env else ["--env", var]
     try:
         done = subprocess.run(argv, check=False, timeout=timeout)
         return done.returncode
@@ -326,7 +271,7 @@ def run_agents(
         return 127
 
 
-def run_mcp(doc: dict[str, Any], name: str, *, passthrough_key: str | None = None) -> int:
+def run_mcp(doc: dict[str, Any], name: str, *, env: dict[str, str] | None = None) -> int:
     """Long-lived: serve stdio until stdin closes, then destroy.
 
     `exec` semantics matter here. This must REPLACE the Python process, not
@@ -334,17 +279,10 @@ def run_mcp(doc: dict[str, Any], name: str, *, passthrough_key: str | None = Non
     client can close its pipe while we are still winding down, and stdin does not
     reach the container.
     """
-    spec = get(doc, name)
-    key = passthrough_key or mint_key()
-    if key is None and spec.get("env"):
-        print(
-            "error: the model proxy did not answer, so no key could be minted and\n"
-            f"       '{name}' has no model endpoint. Is the stack up?",
-            file=sys.stderr,
-        )
-        return 2
-
-    argv = build_argv(doc, name, "mcp", key=key)
+    get(doc, name)
+    argv = build_argv(doc, name, "mcp")
+    for var in sorted(env or {}):
+        argv += ["--env", f"{var}={env[var]}"]
     os.execvp("docker", argv)
     return 127  # only reached if execvp fails
 
@@ -360,19 +298,9 @@ def image_exists(image: str) -> bool:
     ).returncode == 0
 
 
-def docker_network_inspect(name: str) -> None:
-    """Raise if the network is absent, naming the command that creates it."""
-    done = subprocess.run(
-        ["docker", "network", "inspect", name], capture_output=True, check=False,
-    )
-    if done.returncode != 0:
-        raise CliError(f"docker network '{name}' does not exist")
-
-
-def proxy_running() -> bool:
-    """Whether the model proxy is up. Absence is reported, not raised."""
-    done = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=False,
-    )
-    return "litellm" in (done.stdout or "")
+def network_exists(name: str) -> bool:
+    """Whether a network exists. Absence is a fact for doctor to report, not an error."""
+    return subprocess.run(
+        ["docker", "network", "inspect", name],
+        capture_output=True, check=False,
+    ).returncode == 0

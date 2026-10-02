@@ -25,9 +25,6 @@ from typing import Any
 
 from .clients import NAMESPACE
 
-#: Sentinel for the caller-chosen Docker network name, shared with
-#: agents/isolation-flags, scripts/run.sh and scripts/isolation-tests.sh.
-NETWORK_PLACEHOLDER = "NETWORK_PLACEHOLDER"
 from .strategies import resolve, write_json
 
 
@@ -272,8 +269,6 @@ def emit_catalog(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
     upstream = agent.get("upstream") or {}
 
     flags: list[str] = []
-    if iso.get("network"):
-        flags += ["--network", NETWORK_PLACEHOLDER]
     if iso.get("read_only"):
         flags.append("--read-only")
     for mount in iso.get("tmpfs", []):
@@ -307,10 +302,9 @@ def emit_catalog(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
                     "mcp": entrypoints.get("mcp", ""),
                 },
                 "flags": flags,
-                # The network as DECLARED ("internal"/"egress"), so the CLI can
-                # resolve it. The flag list still carries the placeholder, because
-                # that is what agents/isolation-flags carries too.
-                "network": iso.get("network", "internal"),
+                # Optional. Absent or null means the default bridge, which needs
+                # nothing set up. Declared means the caller must create it.
+                "network": iso.get("network"),
                 "env": agent.get("env", {}),
                 "model": upstream.get("id", "default"),
                 "base_url": upstream.get("base_url", "http://litellm:4000/v1"),
