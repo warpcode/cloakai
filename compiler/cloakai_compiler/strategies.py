@@ -27,7 +27,9 @@ from .clients import ANTIGRAVITY_SCHEMA, MCP_SCHEMA
 
 def write_json(path: Path, doc: Any) -> None:
     """Stable, diffable JSON: 2-space indent, insertion key order, trailing newline."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Fast path: check existence first to avoid redundant directory-traversal syscalls in mkdir
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(doc, indent=2, ensure_ascii=False, sort_keys=False)
     path.write_text(text + "\n", encoding="utf-8", newline="\n")
 
