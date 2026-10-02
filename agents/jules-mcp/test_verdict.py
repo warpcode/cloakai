@@ -21,7 +21,7 @@ from pathlib import Path
 # here at all, since the mcp package only exists inside the image.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jules_client import _verdict  # noqa: E402
+from jules_client import _clean_sid, _verdict  # noqa: E402
 
 
 def act(**fields):
@@ -113,6 +113,16 @@ class Verdict(unittest.TestCase):
     def test_missing_state_is_not_treated_as_completed(self):
         out = self.text({}, [act(sessionCompleted={})])
         self.assertNotIn("went IDLE", out)
+
+
+class SessionSanitization(unittest.TestCase):
+    def test_clean_sid_strips_prefix_and_encodes_traversal(self):
+        self.assertEqual(_clean_sid("12345"), "12345")
+        self.assertEqual(_clean_sid("sessions/12345"), "12345")
+        self.assertEqual(_clean_sid("sessions/../sources"), "..%2Fsources")
+        self.assertEqual(_clean_sid("../sources"), "..%2Fsources")
+        self.assertEqual(_clean_sid("123?foo=bar#baz"), "123%3Ffoo%3Dbar%23baz")
+        self.assertEqual(_clean_sid(""), "")
 
 
 if __name__ == "__main__":

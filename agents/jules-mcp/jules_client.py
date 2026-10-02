@@ -11,6 +11,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 
 BASE = "https://jules.googleapis.com/v1alpha"
 
@@ -90,24 +91,35 @@ def create_session(
     return _request("POST", "sessions", payload)
 
 
+def _clean_sid(session_id: str) -> str:
+    """Sanitize session_id to prevent URL path traversal and parameter injection.
+
+    Strips leading 'sessions/' prefix and surrounding slashes, then URL-encodes
+    all special characters (e.g. '../', '?', '#') so session identifiers stay
+    safely contained within the 'sessions/{sid}' URL path segment.
+    """
+    sid = str(session_id or "").strip().removeprefix("sessions/").strip("/")
+    return quote(sid, safe="")
+
+
 def get_session(session_id: str) -> dict:
-    return _request("GET", f"sessions/{session_id.strip().removeprefix('sessions/')}")
+    return _request("GET", f"sessions/{_clean_sid(session_id)}")
 
 
 def send_message(session_id: str, prompt: str) -> dict:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     return _request("POST", f"sessions/{sid}:sendMessage", {"prompt": prompt})
 
 
 def approve_plan(session_id: str, plan_id: str | None = None) -> dict:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     return _request("POST", f"sessions/{sid}:approvePlan", {})
 
 
 def activities(session_id: str, page_size: int = 20) -> list[dict]:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     return _request(
-        "GET", f"sessions/{sid}/activities?pageSize={page_size}"
+        "GET", f"sessions/{sid}/activities?pageSize={int(page_size)}"
     ).get("activities", [])
 
 
@@ -123,14 +135,14 @@ def timeline(session_id: str, max_pages: int = 20) -> list[dict]:
     if it trips, the caller is told the timeline is incomplete and must not treat
     a missing marker as meaningful.
     """
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     collected: list[dict] = []
     token = ""
     complete = True
     for _ in range(max_pages):
         page = f"sessions/{sid}/activities?pageSize=100"
         if token:
-            page += f"&pageToken={token}"
+            page += f"&pageToken={quote(token, safe='')}"
         data = _request("GET", page)
         collected.extend(data.get("activities", []))
         token = data.get("nextPageToken") or ""
