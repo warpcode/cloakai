@@ -333,7 +333,7 @@ compiler/cloakai_compiler/
 ├── strategies.py                         one per output shape, dispatched from the table
 ├── compile.py                            the four rules
 ├── validate.py                           every lint check; all fail loudly
-└── tests/                                52 tests
+└── tests/                                64 tests
 
 agents/                                   the container
 ├── dev.Dockerfile                        code review and release notes
