@@ -31,6 +31,7 @@ REMOTE_KEYS = {"type", "url", "headers"}
 RESERVED_ENV = {"PLUGIN_ROOT", "PLUGIN_DATA"}
 
 REMOTE_TYPES = {"streamable-http", "sse"}
+ALLOWED_SERVER_TYPES = {"stdio", *REMOTE_TYPES}
 
 
 class ValidationError(Exception):
@@ -150,7 +151,7 @@ def check_server_entry(entry: Any, where: str) -> None:
         _fail(where, "must be an object")
 
     stype = entry.get("type")
-    if stype not in {"stdio", *REMOTE_TYPES}:
+    if stype not in ALLOWED_SERVER_TYPES:
         _fail(where, f"'type' must be one of stdio, streamable-http, sse; got {stype!r}")
 
     allowed = STDIO_KEYS if stype == "stdio" else REMOTE_KEYS
