@@ -136,7 +136,7 @@ def build_env(spec: dict[str, Any]) -> list[str]:
         value = str(template)
         for token, actual in replacements.items():
             value = value.replace(token, actual)
-        out += ["--env", f"{var}={value}"]
+        out.extend(["--env", f"{var}={value}"])
     return out
 
 
@@ -230,9 +230,6 @@ def build_argv(
         # The agent's command, split into tokens so nothing is re-parsed by a
         # shell. `mode` above is the entrypoint's dispatch name.
         argv += shlex.split(entrypoints.get("run", ""))
-        argv.append(prompt or "")
-    return argv
-    if shape == "agents":
         argv.append(prompt or "")
     return argv
 
