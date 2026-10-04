@@ -120,14 +120,15 @@ def check_mcp_config(doc: Any, plugin_schema: str, where: str) -> dict:
     if doc.get("$schema") != MCP_SCHEMA:
         _fail(where, f"$schema must be exactly {MCP_SCHEMA!r}, got {doc.get('$schema')!r}")
 
-    if schema_version(doc.get("$schema")) is None:
+    # Performance optimization: cache schema_version result to avoid duplicate regex search
+    mcp_version = schema_version(doc.get("$schema"))
+    if mcp_version is None:
         _fail(where, f"$schema {doc.get('$schema')!r} does not name a recognisable "
                      f"Agent Plugins release (expected /schemas/<major.minor.patch>/)")
 
     # A version mismatch is silent from a user's perspective: skills still load, tools do not.
     # Compare the VERSION, not the URL — the two canonical URLs legitimately differ
     # (plugin.schema.json vs mcp.schema.json) but must name the same release.
-    mcp_version = schema_version(doc.get("$schema"))
     plugin_version = schema_version(plugin_schema)
     if mcp_version != plugin_version:
         _fail(where, f"$schema declares version {mcp_version!r} but plugin.json declares "

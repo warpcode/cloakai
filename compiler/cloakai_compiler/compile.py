@@ -23,8 +23,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from . import validate as V
 from .clients import NAMESPACE
-
 from .strategies import resolve, write_json
 
 
@@ -38,7 +38,8 @@ def emit_conformant(plugin_root: Path, mcp: dict, out_root: Path) -> list[Path]:
     dst.mkdir(parents=True, exist_ok=True)
     for name in ("plugin.json", "mcp.json"):
         target = dst / name
-        target.write_bytes((plugin_root / name).read_bytes())
+        # Performance optimization: use OS copyfile syscall instead of read_bytes + write_bytes to avoid Python buffer allocation
+        shutil.copyfile(plugin_root / name, target)
         written.append(target)
     if (plugin_root / "skills").is_dir():
         shutil.copytree(plugin_root / "skills", dst / "skills", symlinks=False, dirs_exist_ok=True)
@@ -130,7 +131,6 @@ def render_agent_body(plugin_root: Path, agent: dict, frontmatter: dict | None =
 
 
 def agent_doc(plugin_root: Path) -> dict:
-    from . import validate as V
     path = plugin_root / NAMESPACE / "agent.json"
     doc = V.load_json(path)
     if not isinstance(doc, dict):

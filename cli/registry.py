@@ -136,7 +136,8 @@ def build_env(spec: dict[str, Any]) -> list[str]:
         value = str(template)
         for token, actual in replacements.items():
             value = value.replace(token, actual)
-        out += ["--env", f"{var}={value}"]
+        # Performance optimization: tuple extend avoids list allocation during flag construction
+        out.extend(("--env", f"{var}={value}"))
     return out
 
 
@@ -214,9 +215,9 @@ def build_argv(
         argv.append("-i")
     net = network(spec.get("network"))
     if net:
-        argv += ["--network", net]
+        argv.extend(("--network", net))
 
-    argv += [
+    argv.extend([
         "--name", f"cloakai-{shape}-{call_id}",
         "--label", "cloakai.call=1",
         "--label", f"cloakai.started={started}",
@@ -225,14 +226,11 @@ def build_argv(
         *build_env(spec),
         image,
         mode,
-    ]
+    ])
     if shape == "agents":
         # The agent's command, split into tokens so nothing is re-parsed by a
         # shell. `mode` above is the entrypoint's dispatch name.
-        argv += shlex.split(entrypoints.get("run", ""))
-        argv.append(prompt or "")
-    return argv
-    if shape == "agents":
+        argv.extend(shlex.split(entrypoints.get("run", "")))
         argv.append(prompt or "")
     return argv
 
@@ -258,7 +256,10 @@ def run_agents(
     # the caller's own environment rather than embedding a value in a command line
     # that ends up in `ps` and shell history.
     for var in sorted(env or os.environ if env is None else env):
-        argv += ["--env", f"{var}={env[var]}"] if env else ["--env", var]
+        if env:
+            argv.extend(("--env", f"{var}={env[var]}"))
+        else:
+            argv.extend(("--env", var))
     try:
         done = subprocess.run(argv, check=False, timeout=timeout)
         return done.returncode
@@ -282,7 +283,7 @@ def run_mcp(doc: dict[str, Any], name: str, *, env: dict[str, str] | None = None
     get(doc, name)
     argv = build_argv(doc, name, "mcp")
     for var in sorted(env or {}):
-        argv += ["--env", f"{var}={env[var]}"]
+        argv.extend(("--env", f"{var}={env[var]}"))
     os.execvp("docker", argv)
     return 127  # only reached if execvp fails
 
