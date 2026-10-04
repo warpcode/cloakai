@@ -244,6 +244,18 @@ class PromptSafety(unittest.TestCase):
         line = reg.build_argv({"agents": {"dev": spec}}, "dev", "mcp")
         self.assertIn("HTTP_PROXY=socks5://x:1080", line)
 
+    def test_extra_env_placed_before_image_in_argv(self):
+        """Forwarded environment variables (--env) must be docker run options placed before the image."""
+        line = reg.build_argv(
+            ONE, "dev", "agents", prompt="test",
+            extra_env={"MY_KEY": "secret_val"},
+        )
+        image_idx = line.index(SPEC["image"])
+        self.assertIn("MY_KEY=secret_val", line[:image_idx],
+                      "--env options must be placed before the container image")
+        self.assertNotIn("MY_KEY=secret_val", line[image_idx:],
+                         "--env options must not be passed after the container image")
+
 
 class CallerErrors(unittest.TestCase):
     def test_unknown_agent_names_the_alternatives(self):
