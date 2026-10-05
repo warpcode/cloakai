@@ -244,6 +244,21 @@ class PromptSafety(unittest.TestCase):
         line = reg.build_argv({"agents": {"dev": spec}}, "dev", "mcp")
         self.assertIn("HTTP_PROXY=socks5://x:1080", line)
 
+    def test_extra_env_flags_appear_before_image(self):
+        """--env flags for extra_env must come BEFORE the image name in argv so Docker
+        recognizes them as docker run options, not container CLI arguments.
+        """
+        for shape in ("agents", "mcp"):
+            extra = {"CUSTOM_VAR": "secret_val"}
+            line = reg.build_argv(ONE, "dev", shape, prompt="test prompt", extra_env=extra)
+            image_at = line.index(SPEC["image"])
+            self.assertIn("CUSTOM_VAR=secret_val", line)
+            env_val_at = line.index("CUSTOM_VAR=secret_val")
+            self.assertLess(
+                env_val_at, image_at,
+                f"For {shape}, --env flag must come before image at index {image_at}; got index {env_val_at} in {line}"
+            )
+
 
 class CallerErrors(unittest.TestCase):
     def test_unknown_agent_names_the_alternatives(self):
