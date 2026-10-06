@@ -244,6 +244,28 @@ class PromptSafety(unittest.TestCase):
         line = reg.build_argv({"agents": {"dev": spec}}, "dev", "mcp")
         self.assertIn("HTTP_PROXY=socks5://x:1080", line)
 
+    def test_run_agents_does_not_leak_os_environ_when_env_is_none(self):
+        """When env is None, run_agents must not pass host os.environ to docker."""
+        import unittest.mock as mock
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            with mock.patch.dict("os.environ", {"SECRET_HOST_VAR": "secret123"}):
+                reg.run_agents(ONE, "dev", "test prompt", env=None)
+                args, _ = mock_run.call_args
+                argv = args[0]
+                self.assertNotIn("SECRET_HOST_VAR=secret123", argv)
+                self.assertNotIn("SECRET_HOST_VAR", argv)
+
+    def test_run_agents_passes_only_explicit_env(self):
+        import unittest.mock as mock
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0)
+            reg.run_agents(ONE, "dev", "test prompt", env={"EXPLICIT_VAR": "val123"})
+            args, _ = mock_run.call_args
+            argv = args[0]
+            self.assertIn("--env", argv)
+            self.assertIn("EXPLICIT_VAR=val123", argv)
+
 
 class CallerErrors(unittest.TestCase):
     def test_unknown_agent_names_the_alternatives(self):

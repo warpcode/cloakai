@@ -232,9 +232,6 @@ def build_argv(
         argv += shlex.split(entrypoints.get("run", ""))
         argv.append(prompt or "")
     return argv
-    if shape == "agents":
-        argv.append(prompt or "")
-    return argv
 
 
 def run_agents(
@@ -257,8 +254,8 @@ def run_agents(
     # Caller-supplied environment, and ONLY that. `--env FOO=$FOO` forwards from
     # the caller's own environment rather than embedding a value in a command line
     # that ends up in `ps` and shell history.
-    for var in sorted(env or os.environ if env is None else env):
-        argv += ["--env", f"{var}={env[var]}"] if env else ["--env", var]
+    for var, val in sorted((env or {}).items()):
+        argv += ["--env", f"{var}={val}"]
     try:
         done = subprocess.run(argv, check=False, timeout=timeout)
         return done.returncode
