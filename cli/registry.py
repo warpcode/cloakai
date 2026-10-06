@@ -232,9 +232,6 @@ def build_argv(
         argv += shlex.split(entrypoints.get("run", ""))
         argv.append(prompt or "")
     return argv
-    if shape == "agents":
-        argv.append(prompt or "")
-    return argv
 
 
 def run_agents(

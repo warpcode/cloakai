@@ -71,8 +71,59 @@ def cleanup() -> None:
     created.clear()
 
 
+def test_call_labels_batch_unit() -> None:
+    from unittest import mock
+
+    section("batch label fetching unit tests")
+
+    # 1. Empty cids
+    res = reaper.call_labels_batch([])
+    if res == {}:
+        ok("call_labels_batch([]) returns empty dict")
+    else:
+        bad(f"call_labels_batch([]) returned {res}")
+
+    # 2. Mocked docker inspect output with multiple containers
+    fake_cid1 = "123456789abc0000000000000000000000000000000000000000000000000000"
+    fake_cid2 = "abcdef1234560000000000000000000000000000000000000000000000000000"
+    mock_output = (
+        f"{fake_cid1}\t{{\"cloakai.call\":\"1\",\"cloakai.started\":\"1000\"}}\n"
+        f"{fake_cid2}\t{{\"cloakai.call\":\"1\",\"cloakai.started\":\"2000\"}}\n"
+    )
+
+    with mock.patch.object(reaper, "docker", return_value=(0, mock_output)):
+        batch_res = reaper.call_labels_batch(["123456789abc", "abcdef123456"])
+        if fake_cid1 in batch_res and "123456789abc" in batch_res:
+            if batch_res["123456789abc"].get("cloakai.started") == "1000":
+                ok("call_labels_batch parses multi-container output correctly by full and short ID")
+            else:
+                bad(f"call_labels_batch wrong content: {batch_res}")
+        else:
+            bad(f"call_labels_batch missing keys: {batch_res}")
+
+    # 3. Handle docker inspect error
+    with mock.patch.object(reaper, "docker", return_value=(1, "error")):
+        err_res = reaper.call_labels_batch(["123456789abc"])
+        if err_res == {}:
+            ok("call_labels_batch handles docker inspect error gracefully")
+        else:
+            bad(f"call_labels_batch error response not empty: {err_res}")
+
+
 def main() -> int:
     print(f"image={IMAGE} network={NETWORK} max_lifetime={MAX_LIFETIME}s\n")
+
+    test_call_labels_batch_unit()
+
+    # The remaining tests interact with a live Docker daemon (image: cloakai/dev).
+    # If Docker or the image is unavailable, run unit tests and report.
+    if not reaper.docker("image", "inspect", IMAGE, check=False)[0] == 0:
+        print(f"\nNote: Image {IMAGE} not present locally; skipping live docker integration tests.")
+        if failures:
+            print(f"\033[31m{len(failures)} reaper check(s) failed.\033[0m")
+            return 1
+        print("\033[32mReaper unit tests passed.\033[0m")
+        return 0
 
     section("a sweep must spare a LIVE call, even another instance's")
     young_other = make(age=0.0, instance="peer-A")

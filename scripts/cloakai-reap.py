@@ -83,6 +83,33 @@ def call_labels(cid: str) -> dict[str, str]:
     return labels if isinstance(labels, dict) else {}
 
 
+def call_labels_batch(cids: list[str]) -> dict[str, dict[str, str]]:
+    """Batch fetch labels for multiple containers in a single docker inspect invocation.
+
+    Performance optimization: Replaces O(N) sequential `docker inspect` process calls
+    with a single batch call during reaper sweeps, reducing process spawning overhead.
+    """
+    if not cids:
+        return {}
+    rc, out = docker("inspect", "-f", "{{.Id}}\t{{json .Config.Labels}}", *cids, check=False)
+    if rc != 0 or not out.strip():
+        return {}
+
+    result: dict[str, dict[str, str]] = {}
+    for line in out.splitlines():
+        if "\t" not in line:
+            continue
+        full_id, raw_labels = line.split("\t", 1)
+        try:
+            labels = json.loads(raw_labels or "{}")
+            if isinstance(labels, dict):
+                result[full_id] = labels
+                result[full_id[:12]] = labels
+        except json.JSONDecodeError:
+            pass
+    return result
+
+
 def label_for_call(instance: str) -> list[str]:
     """The label set every per-call container must carry."""
     return [
@@ -104,8 +131,16 @@ def sweep(max_lifetime: float, now: float | None = None, dry_run: bool = False) 
         raise RuntimeError(f"docker ps: {out}")
 
     reaped: list[Reaped] = []
-    for cid in out.split():
-        labels = call_labels(cid)
+    cids = out.split()
+    if not cids:
+        return reaped
+
+    # Batch inspect containers in O(1) docker calls rather than O(N) calls
+    batch_labels = call_labels_batch(cids)
+    for cid in cids:
+        labels = batch_labels.get(cid)
+        if labels is None:
+            labels = call_labels(cid)
         raw = labels.get(STARTED)
         try:
             started = float(raw)
