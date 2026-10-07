@@ -74,13 +74,35 @@ def docker(*args: str, check: bool = True) -> tuple[int, str]:
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
-def call_labels(cid: str) -> dict[str, str]:
-    _, out = docker("inspect", "-f", "{{json .Config.Labels}}", cid, check=False)
-    try:
-        labels = json.loads(out or "{}")
-    except json.JSONDecodeError:
+def call_labels_batch(cids: list[str]) -> dict[str, dict[str, str]]:
+    """Batch fetch labels for multiple container IDs in a single `docker inspect` invocation.
+
+    Performance optimization: replaces N individual `docker inspect` subprocess spawns
+    with 1 batch subprocess call (O(N) -> O(1) process spawns).
+    """
+    if not cids:
         return {}
-    return labels if isinstance(labels, dict) else {}
+    _, out = docker("inspect", "-f", "{{.Id}} {{json .Config.Labels}}", *cids, check=False)
+    results: dict[str, dict[str, str]] = {}
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cid, _, raw_json = line.partition(" ")
+        if not raw_json:
+            continue
+        try:
+            labels = json.loads(raw_json)
+            if isinstance(labels, dict):
+                results[cid] = labels
+                results[cid[:12]] = labels
+        except json.JSONDecodeError:
+            continue
+    return results
+
+
+def call_labels(cid: str) -> dict[str, str]:
+    return call_labels_batch([cid]).get(cid, {})
 
 
 def label_for_call(instance: str) -> list[str]:
@@ -103,9 +125,16 @@ def sweep(max_lifetime: float, now: float | None = None, dry_run: bool = False) 
     if rc != 0:
         raise RuntimeError(f"docker ps: {out}")
 
+    cids = out.split()
+    if not cids:
+        return []
+
+    # Batch inspect all container labels in one docker subprocess call instead of N calls
+    labels_by_cid = call_labels_batch(cids)
+
     reaped: list[Reaped] = []
-    for cid in out.split():
-        labels = call_labels(cid)
+    for cid in cids:
+        labels = labels_by_cid.get(cid, {})
         raw = labels.get(STARTED)
         try:
             started = float(raw)

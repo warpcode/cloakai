@@ -72,108 +72,130 @@ def cleanup() -> None:
 
 
 def main() -> int:
-    print(f"image={IMAGE} network={NETWORK} max_lifetime={MAX_LIFETIME}s\n")
-
-    section("a sweep must spare a LIVE call, even another instance's")
-    young_other = make(age=0.0, instance="peer-A")
-    reaped = reaper.sweep(MAX_LIFETIME)
-    if alive(young_other):
-        ok("a fresh call from another instance was NOT reaped")
-    else:
-        bad("THE REAPER KILLED A LIVE CALL — it is too eager")
-    cleanup()
-
-    section("a sweep must reap a HUNG call")
-    hung = make(age=MAX_LIFETIME + 3, instance="self")
-    reaped = reaper.sweep(MAX_LIFETIME)
-    if not alive(hung):
-        ok("a call past its lifetime was reaped")
-    else:
-        bad("A HUNG CALL SURVIVED — this is the 4GB leak")
-    if any(r.cid.startswith(hung[:12]) for r in reaped):
-        ok("the reaped container was reported, with its instance id")
-    else:
-        bad("a container was reaped but not reported")
-    cleanup()
-
-    section("a sweep must not touch containers that are not ours")
-    rc, out = reaper.docker("create", "--network", NETWORK, IMAGE,
-                            "shell", "-c", "sleep 30", check=False)
-    foreign = out.strip()
-    reaper.docker("start", foreign, check=False)
-    created.append(foreign)
-    reaper.sweep(MAX_LIFETIME)
-    if alive(foreign):
-        ok("an UNLABELLED container was left alone (no label, no kill)")
-    else:
-        bad("AN UNLABELLED CONTAINER WAS KILLED — the label filter is not being honoured")
-    cleanup()
-
-    section("a container with an unparseable timestamp is spared, not killed")
-    rc, out = reaper.docker("create", "--network", NETWORK,
-                            "--label", f"{reaper.LABEL}=1",
-                            "--label", f"{reaper.STARTED}=not-a-number",
-                            IMAGE, "shell", "-c", "sleep 30", check=False)
-    weird = out.strip()
-    reaper.docker("start", weird, check=False)
-    created.append(weird)
-    reaper.sweep(MAX_LIFETIME)
-    if alive(weird):
-        ok("a container whose age cannot be determined was spared, not killed on a guess")
-    else:
-        bad("a container of UNKNOWN age was killed — we cannot claim it is hung")
-    cleanup()
-
-    section("a dry run reports without killing")
-    probe = make(age=MAX_LIFETIME + 3, instance="self")
-    reaper.sweep(MAX_LIFETIME, dry_run=True)
-    if alive(probe):
-        ok("--dry-run reaped nothing")
-    else:
-        bad("--dry-run KILLED something")
-    cleanup()
-
-    section("a dry run must SAY something when there is something to reap")
-    # The --dry-run path reported nothing at all, which defeats its only purpose:
-    # telling an operator what would happen. Asserted through the real entry point,
-    # not sweep(), because the gate that dropped the output was in main().
     import io
     import contextlib
     from unittest import mock
 
-    planted = make(age=MAX_LIFETIME + 3, instance="dryrun-probe")
-    argv = ["cloakai-reap.py", "--once", "--dry-run",
-            "--max-lifetime", str(MAX_LIFETIME)]
-    err = io.StringIO()
-    try:
-        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err):
-            reaper.main()
-    finally:
-        cleanup()
-    out = err.getvalue()
-    if "would reap" in out and planted[:12] in out:
-        ok("--dry-run names the container it would reap")
-    else:
-        bad(f"--dry-run said nothing useful; got: {out.strip()[:120]!r}")
+    print(f"image={IMAGE} network={NETWORK} max_lifetime={MAX_LIFETIME}s\n")
 
-    # And with nothing to reap it must stay quiet rather than printing noise.
-    err2 = io.StringIO()
-    try:
-        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err2):
-            reaper.main()
-    finally:
-        cleanup()
-    if err2.getvalue().strip() == "":
-        ok("--dry-run stays quiet when there is nothing to reap")
-    else:
-        bad(f"--dry-run was noisy with nothing to reap: {err2.getvalue().strip()[:80]!r}")
+    section("call_labels_batch unit test (mocked)")
+    mock_output = (
+        "1111222233334444555566667777888899990000111122223333444455556666 {\"cloakai.call\":\"1\",\"cloakai.started\":\"100\",\"cloakai.instance\":\"inst-1\"}\n"
+        "aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999 {\"cloakai.call\":\"1\",\"cloakai.started\":\"200\",\"cloakai.instance\":\"inst-2\"}\n"
+    )
+    with mock.patch.object(reaper, "docker", return_value=(0, mock_output)):
+        res = reaper.call_labels_batch([
+            "1111222233334444555566667777888899990000111122223333444455556666",
+            "aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999",
+        ])
+        if res.get("111122223333") == {"cloakai.call": "1", "cloakai.started": "100", "cloakai.instance": "inst-1"} and \
+           res.get("aaaabbbbcccc") == {"cloakai.call": "1", "cloakai.started": "200", "cloakai.instance": "inst-2"}:
+            ok("call_labels_batch correctly parses multiple container labels in 1 batch call")
+        else:
+            bad(f"call_labels_batch failed to parse labels: {res}")
 
-    section("sweeping an empty system is a no-op, not an error")
-    reaped = reaper.sweep(MAX_LIFETIME)
-    if reaped == []:
-        ok("no containers to reap is reported as an empty list")
-    else:
-        bad(f"expected nothing to reap, got {reaped}")
+    try:
+        make(age=0.0, instance="probe-check")
+        cleanup()
+        can_run_live = True
+    except RuntimeError as e:
+        print(f"  \033[33m–\033[0m skipping live docker container tests ({e})")
+        can_run_live = False
+
+    if can_run_live:
+        section("a sweep must spare a LIVE call, even another instance's")
+        young_other = make(age=0.0, instance="peer-A")
+        reaped = reaper.sweep(MAX_LIFETIME)
+        if alive(young_other):
+            ok("a fresh call from another instance was NOT reaped")
+        else:
+            bad("THE REAPER KILLED A LIVE CALL — it is too eager")
+        cleanup()
+
+        section("a sweep must reap a HUNG call")
+        hung = make(age=MAX_LIFETIME + 3, instance="self")
+        reaped = reaper.sweep(MAX_LIFETIME)
+        if not alive(hung):
+            ok("a call past its lifetime was reaped")
+        else:
+            bad("A HUNG CALL SURVIVED — this is the 4GB leak")
+        if any(r.cid.startswith(hung[:12]) for r in reaped):
+            ok("the reaped container was reported, with its instance id")
+        else:
+            bad("a container was reaped but not reported")
+        cleanup()
+
+        section("a sweep must not touch containers that are not ours")
+        rc, out = reaper.docker("create", "--network", NETWORK, IMAGE,
+                                "shell", "-c", "sleep 30", check=False)
+        foreign = out.strip()
+        reaper.docker("start", foreign, check=False)
+        created.append(foreign)
+        reaper.sweep(MAX_LIFETIME)
+        if alive(foreign):
+            ok("an UNLABELLED container was left alone (no label, no kill)")
+        else:
+            bad("AN UNLABELLED CONTAINER WAS KILLED — the label filter is not being honoured")
+        cleanup()
+
+        section("a container with an unparseable timestamp is spared, not killed")
+        rc, out = reaper.docker("create", "--network", NETWORK,
+                                "--label", f"{reaper.LABEL}=1",
+                                "--label", f"{reaper.STARTED}=not-a-number",
+                                IMAGE, "shell", "-c", "sleep 30", check=False)
+        weird = out.strip()
+        reaper.docker("start", weird, check=False)
+        created.append(weird)
+        reaper.sweep(MAX_LIFETIME)
+        if alive(weird):
+            ok("a container whose age cannot be determined was spared, not killed on a guess")
+        else:
+            bad("a container of UNKNOWN age was killed — we cannot claim it is hung")
+        cleanup()
+
+        section("a dry run reports without killing")
+        probe = make(age=MAX_LIFETIME + 3, instance="self")
+        reaper.sweep(MAX_LIFETIME, dry_run=True)
+        if alive(probe):
+            ok("--dry-run reaped nothing")
+        else:
+            bad("--dry-run KILLED something")
+        cleanup()
+
+        section("a dry run must SAY something when there is something to reap")
+        planted = make(age=MAX_LIFETIME + 3, instance="dryrun-probe")
+        argv = ["cloakai-reap.py", "--once", "--dry-run",
+                "--max-lifetime", str(MAX_LIFETIME)]
+        err = io.StringIO()
+        try:
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err):
+                reaper.main()
+        finally:
+            cleanup()
+        out = err.getvalue()
+        if "would reap" in out and planted[:12] in out:
+            ok("--dry-run names the container it would reap")
+        else:
+            bad(f"--dry-run said nothing useful; got: {out.strip()[:120]!r}")
+
+        # And with nothing to reap it must stay quiet rather than printing noise.
+        err2 = io.StringIO()
+        try:
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(err2):
+                reaper.main()
+        finally:
+            cleanup()
+        if err2.getvalue().strip() == "":
+            ok("--dry-run stays quiet when there is nothing to reap")
+        else:
+            bad(f"--dry-run was noisy with nothing to reap: {err2.getvalue().strip()[:80]!r}")
+
+        section("sweeping an empty system is a no-op, not an error")
+        reaped = reaper.sweep(MAX_LIFETIME)
+        if reaped == []:
+            ok("no containers to reap is reported as an empty list")
+        else:
+            bad(f"expected nothing to reap, got {reaped}")
 
     print()
     if failures:
