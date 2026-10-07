@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = "https://jules.googleapis.com/v1alpha"
@@ -90,22 +91,35 @@ def create_session(
     return _request("POST", "sessions", payload)
 
 
+def _clean_session_id(session_id: str) -> str:
+    """Validate and sanitize a session ID to prevent path traversal in request URLs.
+
+    Strips whitespace, removes 'sessions/' prefix, rejects path traversal vectors
+    (e.g., '..', '/', '\\'), and URL-encodes the identifier.
+    """
+    sid = session_id.strip().removeprefix("sessions/")
+    if not sid or ".." in sid or "/" in sid or "\\" in sid:
+        raise JulesError(f"Invalid session ID format: {session_id!r}")
+    return urllib.parse.quote(sid, safe="")
+
+
 def get_session(session_id: str) -> dict:
-    return _request("GET", f"sessions/{session_id.strip().removeprefix('sessions/')}")
+    sid = _clean_session_id(session_id)
+    return _request("GET", f"sessions/{sid}")
 
 
 def send_message(session_id: str, prompt: str) -> dict:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_session_id(session_id)
     return _request("POST", f"sessions/{sid}:sendMessage", {"prompt": prompt})
 
 
 def approve_plan(session_id: str, plan_id: str | None = None) -> dict:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_session_id(session_id)
     return _request("POST", f"sessions/{sid}:approvePlan", {})
 
 
 def activities(session_id: str, page_size: int = 20) -> list[dict]:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_session_id(session_id)
     return _request(
         "GET", f"sessions/{sid}/activities?pageSize={page_size}"
     ).get("activities", [])
@@ -123,7 +137,7 @@ def timeline(session_id: str, max_pages: int = 20) -> list[dict]:
     if it trips, the caller is told the timeline is incomplete and must not treat
     a missing marker as meaningful.
     """
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_session_id(session_id)
     collected: list[dict] = []
     token = ""
     complete = True

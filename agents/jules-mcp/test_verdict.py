@@ -21,7 +21,7 @@ from pathlib import Path
 # here at all, since the mcp package only exists inside the image.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jules_client import _verdict  # noqa: E402
+from jules_client import JulesError, _clean_session_id, _verdict  # noqa: E402
 
 
 def act(**fields):
@@ -113,6 +113,26 @@ class Verdict(unittest.TestCase):
     def test_missing_state_is_not_treated_as_completed(self):
         out = self.text({}, [act(sessionCompleted={})])
         self.assertNotIn("went IDLE", out)
+
+
+class CleanSessionId(unittest.TestCase):
+    def test_valid_session_ids_pass(self):
+        self.assertEqual(_clean_session_id("abc-123"), "abc-123")
+        self.assertEqual(_clean_session_id("sessions/abc-123"), "abc-123")
+        self.assertEqual(_clean_session_id("  sessions/abc-123  "), "abc-123")
+
+    def test_path_traversal_attempts_are_rejected(self):
+        for bad in (
+            "../admin",
+            "sessions/../../admin",
+            "sessions/foo/bar",
+            "foo\\bar",
+            "",
+            "   ",
+            "sessions/",
+        ):
+            with self.assertRaises(JulesError):
+                _clean_session_id(bad)
 
 
 if __name__ == "__main__":
