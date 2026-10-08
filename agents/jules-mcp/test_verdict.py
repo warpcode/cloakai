@@ -21,7 +21,22 @@ from pathlib import Path
 # here at all, since the mcp package only exists inside the image.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jules_client import _verdict  # noqa: E402
+from jules_client import _clean_sid, _verdict  # noqa: E402
+
+
+class SessionIdSanitizing(unittest.TestCase):
+    def test_clean_sid_normal(self):
+        self.assertEqual(_clean_sid("abc-123"), "abc-123")
+
+    def test_clean_sid_with_prefix(self):
+        self.assertEqual(_clean_sid("sessions/abc-123"), "abc-123")
+
+    def test_clean_sid_prevents_path_traversal(self):
+        self.assertEqual(_clean_sid("sessions/../../sources"), "..%2F..%2Fsources")
+        self.assertEqual(_clean_sid("../../sources"), "..%2F..%2Fsources")
+
+    def test_clean_sid_prevents_query_injection(self):
+        self.assertEqual(_clean_sid("123?pageSize=100"), "123%3FpageSize%3D100")
 
 
 def act(**fields):

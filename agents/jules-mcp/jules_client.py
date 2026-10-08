@@ -10,9 +10,18 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 BASE = "https://jules.googleapis.com/v1alpha"
+
+
+def _clean_sid(session_id: str) -> str:
+    """Sanitize and URL-encode session_id to prevent path traversal / parameter injection."""
+    sid = session_id.strip()
+    if sid.startswith("sessions/"):
+        sid = sid[len("sessions/"):].lstrip("/")
+    return urllib.parse.quote(sid, safe="")
 
 
 class JulesError(RuntimeError):
@@ -91,21 +100,21 @@ def create_session(
 
 
 def get_session(session_id: str) -> dict:
-    return _request("GET", f"sessions/{session_id.strip().removeprefix('sessions/')}")
+    return _request("GET", f"sessions/{_clean_sid(session_id)}")
 
 
 def send_message(session_id: str, prompt: str) -> dict:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     return _request("POST", f"sessions/{sid}:sendMessage", {"prompt": prompt})
 
 
 def approve_plan(session_id: str, plan_id: str | None = None) -> dict:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     return _request("POST", f"sessions/{sid}:approvePlan", {})
 
 
 def activities(session_id: str, page_size: int = 20) -> list[dict]:
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     return _request(
         "GET", f"sessions/{sid}/activities?pageSize={page_size}"
     ).get("activities", [])
@@ -123,7 +132,7 @@ def timeline(session_id: str, max_pages: int = 20) -> list[dict]:
     if it trips, the caller is told the timeline is incomplete and must not treat
     a missing marker as meaningful.
     """
-    sid = session_id.strip().removeprefix("sessions/")
+    sid = _clean_sid(session_id)
     collected: list[dict] = []
     token = ""
     complete = True
