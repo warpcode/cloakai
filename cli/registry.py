@@ -119,8 +119,12 @@ def resolve_flags(spec: dict[str, Any]) -> list[str]:
     return [str(flag) for flag in spec.get("flags", [])]
 
 
-def build_env(spec: dict[str, Any]) -> list[str]:
-    """The agent's own env, with {{base_url}} and {{model}} substituted.
+def build_env(
+    spec: dict[str, Any],
+    extra_env: dict[str, str] | None = None,
+) -> list[str]:
+    """The agent's own env, with {{base_url}} and {{model}} substituted,
+    plus any caller-supplied extra_env.
 
     Two placeholders. {{key}} is gone with the proxy: an agent either needs no
     credential, or the operator supplies one through the environment. The CLI
@@ -137,6 +141,12 @@ def build_env(spec: dict[str, Any]) -> list[str]:
         for token, actual in replacements.items():
             value = value.replace(token, actual)
         out += ["--env", f"{var}={value}"]
+    if extra_env:
+        for var, value in sorted(extra_env.items()):
+            if value is not None:
+                out += ["--env", f"{var}={value}"]
+            else:
+                out += ["--env", var]
     return out
 
 
@@ -149,6 +159,7 @@ def build_argv(
     call_id: str | None = None,
     started: int | None = None,
     interactive: bool = True,
+    extra_env: dict[str, str] | None = None,
 ) -> list[str]:
     """The exact `docker run` line for one invocation.
 
@@ -222,7 +233,7 @@ def build_argv(
         "--label", f"cloakai.started={started}",
         "--label", f"cloakai.instance={name}",
         *resolve_flags(spec),
-        *build_env(spec),
+        *build_env(spec, extra_env=extra_env),
         image,
         mode,
     ]
@@ -250,12 +261,7 @@ def run_agents(
         raise CliError("a prompt is required: cloakai agents <name> \"prompt\"")
 
     get(doc, name)
-    argv = build_argv(doc, name, "agents", prompt=prompt)
-    # Caller-supplied environment, and ONLY that. `--env FOO=$FOO` forwards from
-    # the caller's own environment rather than embedding a value in a command line
-    # that ends up in `ps` and shell history.
-    for var in sorted(env or os.environ if env is None else env):
-        argv += ["--env", f"{var}={env[var]}"] if env else ["--env", var]
+    argv = build_argv(doc, name, "agents", prompt=prompt, extra_env=env)
     try:
         done = subprocess.run(argv, check=False, timeout=timeout)
         return done.returncode
@@ -277,9 +283,7 @@ def run_mcp(doc: dict[str, Any], name: str, *, env: dict[str, str] | None = None
     reach the container.
     """
     get(doc, name)
-    argv = build_argv(doc, name, "mcp")
-    for var in sorted(env or {}):
-        argv += ["--env", f"{var}={env[var]}"]
+    argv = build_argv(doc, name, "mcp", extra_env=env)
     os.execvp("docker", argv)
     return 127  # only reached if execvp fails
 
