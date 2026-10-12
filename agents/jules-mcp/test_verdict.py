@@ -21,7 +21,7 @@ from pathlib import Path
 # here at all, since the mcp package only exists inside the image.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jules_client import _verdict  # noqa: E402
+from jules_client import JulesError, _clean_sid, _verdict  # noqa: E402
 
 
 def act(**fields):
@@ -113,6 +113,26 @@ class Verdict(unittest.TestCase):
     def test_missing_state_is_not_treated_as_completed(self):
         out = self.text({}, [act(sessionCompleted={})])
         self.assertNotIn("went IDLE", out)
+
+
+class CleanSessionId(unittest.TestCase):
+    def test_clean_sid_valid_and_prefixed(self):
+        self.assertEqual(_clean_sid("s123"), "s123")
+        self.assertEqual(_clean_sid("sessions/s123"), "s123")
+        self.assertEqual(_clean_sid("  sessions/s123  "), "s123")
+
+    def test_clean_sid_escapes_path_traversal_and_special_chars(self):
+        self.assertEqual(_clean_sid("../sources"), "..%2Fsources")
+        self.assertEqual(_clean_sid("s123/cancel"), "s123%2Fcancel")
+        self.assertEqual(_clean_sid("s123?param=val"), "s123%3Fparam%3Dval")
+
+    def test_clean_sid_rejects_empty_inputs(self):
+        with self.assertRaises(JulesError):
+            _clean_sid("")
+        with self.assertRaises(JulesError):
+            _clean_sid("   ")
+        with self.assertRaises(JulesError):
+            _clean_sid("sessions/")
 
 
 if __name__ == "__main__":
