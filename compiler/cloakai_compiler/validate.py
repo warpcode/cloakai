@@ -118,17 +118,20 @@ def check_mcp_config(doc: Any, plugin_schema: str, where: str) -> dict:
         _fail(where, f"unknown top-level field(s): {', '.join(sorted(unknown))}. "
                      f"Top level must be exactly $schema and mcpServers")
 
-    if doc.get("$schema") != MCP_SCHEMA:
-        _fail(where, f"$schema must be exactly {MCP_SCHEMA!r}, got {doc.get('$schema')!r}")
+    schema_uri = doc.get("$schema")
+    if schema_uri != MCP_SCHEMA:
+        _fail(where, f"$schema must be exactly {MCP_SCHEMA!r}, got {schema_uri!r}")
 
-    if schema_version(doc.get("$schema")) is None:
-        _fail(where, f"$schema {doc.get('$schema')!r} does not name a recognisable "
+    # Optimization: evaluate `schema_version` once on schema_uri to avoid duplicate dictionary
+    # lookups and redundant regex operations.
+    mcp_version = schema_version(schema_uri)
+    if mcp_version is None:
+        _fail(where, f"$schema {schema_uri!r} does not name a recognisable "
                      f"Agent Plugins release (expected /schemas/<major.minor.patch>/)")
 
     # A version mismatch is silent from a user's perspective: skills still load, tools do not.
     # Compare the VERSION, not the URL — the two canonical URLs legitimately differ
     # (plugin.schema.json vs mcp.schema.json) but must name the same release.
-    mcp_version = schema_version(doc.get("$schema"))
     plugin_version = schema_version(plugin_schema)
     if mcp_version != plugin_version:
         _fail(where, f"$schema declares version {mcp_version!r} but plugin.json declares "
