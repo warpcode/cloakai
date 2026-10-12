@@ -26,6 +26,7 @@ PLUGIN_TOP_LEVEL = {
 AUTHOR_KEYS = {"name", "email", "url"}
 
 MCP_TOP_LEVEL = {"$schema", "mcpServers"}
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 STDIO_KEYS = {"type", "command", "args", "env", "cwd"}
 REMOTE_KEYS = {"type", "url", "headers"}
 RESERVED_ENV = {"PLUGIN_ROOT", "PLUGIN_DATA"}
@@ -177,6 +178,8 @@ def check_server_entry(entry: Any, where: str) -> None:
             for k, v in env.items():
                 if k in RESERVED_ENV:
                     _fail(where, f"env key {k!r} is reserved and invalidates the server entry")
+                if not ENV_NAME_RE.match(k):
+                    _fail(where, f"env key {k!r} is invalid: must match {ENV_NAME_RE.pattern}")
                 if not isinstance(v, str):
                     _fail(where, f"env.{k} must be a string")
         if "cwd" in entry and not CWD_RE.match(entry["cwd"]):

@@ -463,6 +463,18 @@ class TestLint(Sandbox):
                                                      "env": {"PLUGIN_ROOT": "/tmp"}}}})
         self.assertFailsNaming("reserved")
 
+    def test_stdio_invalid_env_key_name(self):
+        self.write("mcp.json", {"$schema": MCP_SCHEMA,
+                                "mcpServers": {"a": {"type": "stdio", "command": "x",
+                                                     "env": {"INVALID KEY!": "value"}}}})
+        self.assertFailsNaming("is invalid")
+
+    def test_stdio_env_key_flag_injection_rejected(self):
+        self.write("mcp.json", {"$schema": MCP_SCHEMA,
+                                "mcpServers": {"a": {"type": "stdio", "command": "x",
+                                                     "env": {"--entrypoint": "sh"}}}})
+        self.assertFailsNaming("is invalid")
+
     def test_stdio_bad_cwd(self):
         self.write("mcp.json", {"$schema": MCP_SCHEMA,
                                 "mcpServers": {"a": {"type": "stdio", "command": "x",
