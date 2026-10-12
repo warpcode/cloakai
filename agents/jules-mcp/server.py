@@ -31,6 +31,7 @@ Two deliberate constraints:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from typing import Any
 
@@ -48,7 +49,10 @@ GATED = {"PLAN_PENDING", "AWAITING_PLAN_APPROVAL", "FEEDBACK_PENDING", "AWAITING
 
 
 def _fail(exc: Exception) -> str:
-    return f"error: {exc}"
+    if isinstance(exc, jules.JulesError):
+        return f"error: {exc}"
+    logging.exception("Unhandled error in Jules MCP server")
+    return "error: An internal error occurred"
 
 
 def _session_summary(session: dict[str, Any]) -> str:
