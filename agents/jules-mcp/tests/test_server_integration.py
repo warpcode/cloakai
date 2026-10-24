@@ -27,6 +27,8 @@ class TestFastAPIServerIntegration(unittest.TestCase):
         self.assertEqual(data["status"], "healthy")
         self.assertEqual(data["server"], "cloakai-jules")
         self.assertIn("tool_count", data)
+        self.assertIn("prompt_count", data)
+        self.assertEqual(data["prompt_count"], 10)
 
     def test_tools_catalogue_endpoint(self):
         resp = self.client.get("/tools")
@@ -38,6 +40,27 @@ class TestFastAPIServerIntegration(unittest.TestCase):
         self.assertIn("jules_status", names)
         self.assertIn("jules_sources", names)
         self.assertIn("jules_nudge", names)
+
+    def test_prompts_catalogue_endpoint(self):
+        resp = self.client.get("/prompts")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("prompts", data)
+        self.assertEqual(len(data["prompts"]), 10)
+        names = {p["name"] for p in data["prompts"]}
+        self.assertIn("jules_task_scaffold", names)
+        self.assertIn("jules_agent_bolt", names)
+
+    def test_prompts_render_endpoint(self):
+        resp = self.client.post("/prompts/jules_agent_bolt", json={"focus_slice": "core/hotpath.py"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("messages", data)
+        self.assertIn("core/hotpath.py", data["messages"][0]["content"]["text"])
+
+    def test_prompts_render_endpoint_404(self):
+        resp = self.client.post("/prompts/unknown_template", json={})
+        self.assertEqual(resp.status_code, 404)
 
     def test_mcp_post_initialize(self):
         """Verify POST /mcp handles the exact payload from cloakai-healthcheck.sh."""
@@ -74,6 +97,36 @@ class TestFastAPIServerIntegration(unittest.TestCase):
         names = {t["name"] for t in tools}
         self.assertIn("jules_start", names)
         self.assertIn("jules_sources", names)
+
+    def test_mcp_post_prompts_list(self):
+        body = {
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "prompts/list",
+            "params": {},
+        }
+        resp = self.client.post("/mcp", json=body)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["id"], 20)
+        prompts = data["result"]["prompts"]
+        self.assertEqual(len(prompts), 10)
+
+    def test_mcp_post_prompts_get(self):
+        body = {
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "prompts/get",
+            "params": {
+                "name": "jules_agent_sentinel",
+                "arguments": {"risk_class": "XSS"},
+            },
+        }
+        resp = self.client.post("/mcp", json=body)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["id"], 21)
+        self.assertIn("XSS", data["result"]["messages"][0]["content"]["text"])
 
     @patch("handlers.HANDLERS")
     def test_mcp_post_tools_call(self, mock_handlers):

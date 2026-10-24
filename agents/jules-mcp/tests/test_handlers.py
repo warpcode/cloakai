@@ -39,6 +39,8 @@ class TestHandlers(unittest.TestCase):
         self.assertIsNone(res.error)
         self.assertEqual(res.result["serverInfo"]["name"], "cloakai-jules")
         self.assertEqual(res.result["protocolVersion"], "2024-11-05")
+        self.assertIn("tools", res.result["capabilities"])
+        self.assertIn("prompts", res.result["capabilities"])
 
     def test_ping(self):
         req = JSONRPCRequest(id=2, method="ping")
@@ -133,6 +135,40 @@ class TestHandlers(unittest.TestCase):
         self.assertFalse(res.result["isError"])
         self.assertIn("Undelivered Git Patch", res.result["content"][0]["text"])
         self.assertIn("+baz", res.result["content"][0]["text"])
+
+    def test_prompts_list(self):
+        req = JSONRPCRequest(id=10, method="prompts/list")
+        res = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertEqual(res.id, 10)
+        self.assertIsNone(res.error)
+        prompts = res.result["prompts"]
+        self.assertEqual(len(prompts), 10)
+        names = {p["name"] for p in prompts}
+        self.assertIn("jules_agent_bolt", names)
+        self.assertIn("jules_task_scaffold", names)
+
+    def test_prompts_get(self):
+        req = JSONRPCRequest(
+            id=11,
+            method="prompts/get",
+            params={"name": "jules_agent_sentinel", "arguments": {"risk_class": "SSRF"}},
+        )
+        res = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertEqual(res.id, 11)
+        self.assertIsNone(res.error)
+        msg_text = res.result["messages"][0]["content"]["text"]
+        self.assertIn("SSRF", msg_text)
+        self.assertIn("Security Audit", msg_text)
+
+    def test_prompts_get_unknown(self):
+        req = JSONRPCRequest(
+            id=12,
+            method="prompts/get",
+            params={"name": "unknown_prompt", "arguments": {}},
+        )
+        res = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertEqual(res.id, 12)
+        self.assertEqual(res.error.code, METHOD_NOT_FOUND)
 
     def test_unknown_method(self):
         req = JSONRPCRequest(id=8, method="unknown_method")

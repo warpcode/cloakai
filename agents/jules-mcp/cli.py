@@ -373,10 +373,8 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     """Serve as an MCP server: stdio by default, or HTTP/SSE with --http."""
     if not jules.api_key_present(getattr(args, "api_key", None)):
         sys.stderr.write(
-            "error: JULES_API_KEY is not set. Pass it per invocation:\n"
-            "  docker run --rm -e JULES_API_KEY cloakai/jules mcp\n"
+            "warning: JULES_API_KEY is not set. Tools requiring API calls will fail until configured.\n"
         )
-        return 2
 
     if args.http:
         try:

@@ -341,14 +341,12 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Fail early if JULES_API_KEY is not set when running in standalone mode
+    # Warn if JULES_API_KEY is not set when running in standalone mode
     if not jules.api_key_present():
-        print(
-            "error: JULES_API_KEY is not set. Pass it per invocation:\n"
-            "  docker run --rm -e JULES_API_KEY cloakai/jules mcp",
-            file=sys.stderr,
+        logger.warning(
+            "JULES_API_KEY is not set in environment. "
+            "Tools requiring authentication will fail until configured."
         )
-        return 2
 
     client = AsyncJulesClient()
 

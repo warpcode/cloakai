@@ -100,6 +100,55 @@ class TestJulesCLI(unittest.TestCase):
         self.assertEqual(ret, 0)
         self.assertIn("permanently deleted", stdout.getvalue())
 
+    def test_parser_prompts(self):
+        args = self.parser.parse_args(["prompts"])
+        self.assertEqual(args.subcommand, "prompts")
+        self.assertFalse(args.json)
+
+        args_json = self.parser.parse_args(["prompts", "--json"])
+        self.assertTrue(args_json.json)
+
+    def test_parser_prompt(self):
+        args = self.parser.parse_args(["prompt", "jules_agent_bolt", "focus_slice=api/"])
+        self.assertEqual(args.subcommand, "prompt")
+        self.assertEqual(args.name, "jules_agent_bolt")
+        self.assertEqual(args.prompt_args, ["focus_slice=api/"])
+        self.assertFalse(args.json)
+
+    def test_cmd_prompts_table(self):
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["prompts"])
+        self.assertEqual(ret, 0)
+        output = stdout.getvalue()
+        self.assertIn("jules_task_scaffold", output)
+        self.assertIn("jules_agent_bolt", output)
+
+    def test_cmd_prompts_json(self):
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["prompts", "--json"])
+        self.assertEqual(ret, 0)
+        output = stdout.getvalue()
+        self.assertTrue(output.strip().startswith("["))
+        self.assertIn("jules_agent_sentinel", output)
+
+    def test_cmd_prompt_render(self):
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["prompt", "jules_task_scaffold", "goal=Add caching", "constraints=fast"])
+        self.assertEqual(ret, 0)
+        output = stdout.getvalue()
+        self.assertIn("Add caching", output)
+        self.assertIn("CONSTRAINTS:\nfast", output)
+
+    def test_cmd_prompt_unknown(self):
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            ret = main(["prompt", "non_existent_prompt"])
+        self.assertEqual(ret, 1)
+        self.assertIn("Unknown prompt", stderr.getvalue())
+
     @patch("cli.cmd_mcp")
     def test_mcp_dispatch(self, mock_cmd_mcp):
         mock_cmd_mcp.return_value = 0

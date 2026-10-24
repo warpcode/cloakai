@@ -26,6 +26,8 @@ Whenever we create MCP servers, **they must be a CLI first, and an MCP second**.
      │  • nudge <id>          │      │      (jules mcp)      │   │  (jules mcp --http)   │
      │  • archive / delete    │      └───────────────────────┘   └───────────────────────┘
      │  • patch <id> [-o ...] │
+     │  • prompts             │
+     │  • prompt <name> [...] │
      │  • call <endpoint>     │
      └────────────────────────┘
 ```
@@ -85,18 +87,20 @@ When running inside Docker or standalone as an MCP server, how does the agent re
 
 ```
 agents/jules-mcp/
-├── cli.py            # Primary CLI entrypoint (sources, status, audit, patch, mcp)
+├── cli.py            # Primary CLI entrypoint (sources, status, audit, patch, prompts, mcp)
 ├── __main__.py       # Module runner dispatching directly to cli.main()
 ├── protocol.py       # Pydantic v2 schemas for JSON-RPC 2.0 & MCP (2024-11-05)
+├── prompts.py        # 10 MCP prompt templates (bolt, sentinel, scaffold, review, etc.)
 ├── jules_client.py   # Async & sync Jules REST client with credential isolation
-├── handlers.py       # Tool registry, argument validation, and markdown formatters
+├── handlers.py       # Tool & prompt registry, validation, and JSON-RPC dispatcher
 ├── server.py         # FastAPI application and stdio runner
 ├── verify.py         # Stdio MCP verification script
 ├── probe.py          # Sandbox proof harness
 └── tests/
     ├── test_cli.py                 # CLI argument parsing, flags, and safety gates
     ├── test_protocol.py            # Protocol serialization and schema extraction
-    ├── test_handlers.py            # Tool dispatching and error mapping
+    ├── test_prompts.py             # Prompt template generation and argument tests
+    ├── test_handlers.py            # Tool and prompt dispatching and error mapping
     ├── test_server_integration.py  # FastAPI endpoint integration tests
     └── test_verdict.py             # Finished vs parked timeline classification
 ```
@@ -134,6 +138,14 @@ jules patch 1234567890
 
 # Save patch to file
 jules patch 1234567890 -o /tmp/fix.patch
+
+# List available prompt templates
+jules prompts
+
+# Render a prompt template to stdout
+jules prompt jules_task_scaffold goal="Optimize cache lookups" constraints="No extra deps"
+jules prompt jules_agent_bolt focus_slice=services/api min_impact="15% latency reduction"
+jules prompt jules_steer_nudge template=pr_reminder session_id=1234567890
 
 # Reversibly archive a session (hides from default listing)
 jules archive 1234567890
@@ -182,6 +194,8 @@ uvicorn agents.jules_mcp.server:app --host 0.0.0.0 --port 8081
 | `/messages` | `POST` | Message post intake for active SSE sessions (`?sessionId=...`) |
 | `/health` | `GET` | Readiness and credential check (`{"status": "ok", "api_key_configured": true}`) |
 | `/tools` | `GET` | REST catalog of available MCP tools and input schemas |
+| `/prompts` | `GET` | REST catalog of available MCP prompt templates and arguments |
+| `/prompts/{name}` | `POST` | Render an MCP prompt template with provided JSON arguments |
 
 ```bash
 # Check health
@@ -189,6 +203,14 @@ curl -s http://127.0.0.1:8081/health
 
 # List available tools
 curl -s http://127.0.0.1:8081/tools
+
+# List available prompt templates
+curl -s http://127.0.0.1:8081/prompts
+
+# Render a prompt template via HTTP
+curl -s -X POST http://127.0.0.1:8081/prompts/jules_agent_bolt \
+  -H "Content-Type: application/json" \
+  -d '{"focus_slice": "services/cache", "min_impact": "20% latency"}'
 
 # Send stateless JSON-RPC call
 curl -s -X POST http://127.0.0.1:8081/mcp \
@@ -222,6 +244,25 @@ All tools communicate strictly with `jules.googleapis.com/v1alpha`:
 
 ---
 
+## Prompt Reference (10 Canonical Prompts)
+
+The server implements the standard Model Context Protocol prompts specification (`prompts/list` and `prompts/get`), providing high-discipline, structured prompt architectures:
+
+| Prompt Name | Purpose / Persona | Arguments |
+|---|---|---|
+| `jules_task_scaffold` | High-discipline general task prompt: baseline orientation, surgical scope, strict no-litter rule, single-concern diff, failure-then-success regression tests, and structured PR delivery. | `goal` (req), `constraints`, `repo_conventions` |
+| `jules_agent_bolt` | Performance janitor: targets hot paths, N+1 query loops, unbounded allocations; enforces benchmark evidence before code changes; zero tolerance for cosmetic micro-optimizations. | `focus_slice`, `min_impact` |
+| `jules_agent_sentinel` | Security auditor: scans for reachable vulnerabilities (injection, auth bypass, SSRF); safe disclosure gate (never leaks payloads or secrets in PR); enforces targeted regression tests. | `focus_slice`, `risk_class` |
+| `jules_agent_docs_auditor` | Documentation janitor: audits quickstarts, env vars, and CLI flags directly against source code ground truth; strictly bans subjective prose rewriting. | `focus_slice` |
+| `jules_agent_test_smith` | Regression test writer: adds tests for edge cases and errors; enforces mandatory **break-the-code verification** (temporarily injecting an intentional defect to prove the test actually fails). | `target_module` (req) |
+| `jules_agent_workflow_warden` | CI hygiene: audits `.github/workflows` for unpinned third-party actions, missing `concurrency.cancel-in-progress`, matrix syntax, and redundant build steps. | — |
+| `jules_agent_ratchet` | Deprecation ratchet: systematically eliminates a specific deprecated API call or lint violation across a codebase without expanding scope. | `rule_or_deprecation` (req), `focus_slice` |
+| `jules_plan_review` | Plan evaluation checklist for human or AI supervisor before approving a proposed implementation plan. | `session_id` (req), `plan_text` |
+| `jules_replacement_session` | Handoff prompt for recovering a wedged Jules session starting from a clean tidy branch with squashed salvageable changes. | `old_session_id` (req), `tidy_branch` (req), `remaining_goals` (req) |
+| `jules_steer_nudge` | Standardized steering and nudge message generator for reviving idle sessions (`progress_check`, `plan_stalled`, `pr_reminder`). | `template` (req), `session_id` |
+
+---
+
 ## Testing
 
 Run the full test suite using `uv`:
@@ -230,8 +271,9 @@ Run the full test suite using `uv`:
 uv run --with fastapi --with pydantic --with httpx --with pytest pytest agents/jules-mcp/
 ```
 
-- `test_cli.py`: 9 tests verifying CLI argument parsing, flags, safety gates (`--confirm`), and `mcp` dispatch.
+- `test_prompts.py`: 12 tests verifying prompt registration, parameter injection, and persona output contracts.
+- `test_cli.py`: 15 tests verifying CLI commands, flags, safety gates (`--confirm`), `prompts`, `prompt`, and `mcp` dispatch.
 - `test_verdict.py`: 11 tests covering timeline parsing, plan gates, idle detection, and truncated timelines.
 - `test_protocol.py`: 8 tests validating JSON-RPC formatting and Pydantic input schemas.
-- `test_handlers.py`: 9 tests verifying tool execution, argument binding, and error mapping across all tools.
-- `test_server_integration.py`: 8 tests covering `/mcp`, `/health`, `/tools`, and header authentication.
+- `test_handlers.py`: 12 tests verifying tool and prompt execution, argument binding, and error mapping.
+- `test_server_integration.py`: 13 tests covering `/mcp`, `/health`, `/tools`, `/prompts`, `/prompts/{name}`, and header authentication.
