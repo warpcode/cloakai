@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# The `jules` command: CLI first, MCP second.
+#
+# Examples:
+#   jules --help
+#   jules sources
+#   jules status <id>
+#   jules mcp
+#   jules mcp --http
+set -euo pipefail
+
+source_bin="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$source_bin")/.." && pwd)"
+
+if command -v uv >/dev/null 2>&1; then
+  exec uv run --with fastapi --with uvicorn --with pydantic --with httpx python "$ROOT/agents/jules-mcp/cli.py" "$@"
+else
+  PYTHONPATH="$ROOT/agents/jules-mcp:${PYTHONPATH:-}" \
+  exec "${CLOAKAI_PYTHON:-python3}" "$ROOT/agents/jules-mcp/cli.py" "$@"
+fi

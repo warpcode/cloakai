@@ -1,243 +1,370 @@
-"""Jules as an MCP server over stdio.
+"""Jules Model Context Protocol (MCP) server.
 
-The whole point of this image is that it obeys the same contract as every other
-cloakai image:
-
-    docker run --rm cloakai/jules mcp
-
-No gateway, no port, no network of ours. Jules is an API-driven autonomous agent
-system where every session is its own sandboxed agent, so this image is a thin
-adapter: four HTTP calls wrapped as four tools.
-
-Why four tools and not one, when the gateway model is one tool per agent? Because
-a Jules session is not a `docker run`. It outlives the call that created it, it
-can park on a plan-approval gate for 20-30 minutes, and its own API documents that
-`COMPLETED` does not mean terminal. A single blocking tool would have to either
-time out or report "done" for a session that is actually waiting for a human.
-
-So `start` returns a session id and the client drives it from there — which is
-what "interact through API messaging" means anyway.
-
-Two deliberate constraints:
-
-  * The API key is read per invocation and never logged, never echoed, and never
-    baked into the image. JulesError carries Google's response, never our request,
-    because our request carries the key in a header.
-  * The key is never passed into a session's environmentVariables, which the Jules
-    API supports, because that would push the credential into the sandbox and into
-    Google's session log.
+Provides dual-transport MCP serving:
+1. HTTP / SSE via FastAPI (`/mcp`, `/sse`, `/messages`, `/health`, `/tools`).
+2. Stdio JSON-RPC 2.0 transport for Docker container invocations (`docker run --rm -i ... cloakai/jules mcp`).
 """
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
 import logging
+import os
 import sys
-from typing import Any
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator
 
-from mcp.server.mcpserver import MCPServer
+from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import jules_client as jules
-from .jules_client import _verdict
+try:
+    from . import jules_client as jules
+    from . import prompts
+    from .handlers import HANDLERS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, TOOLS, handle_jsonrpc
+    from .jules_client import AsyncJulesClient, JulesError
+    from .prompts import get_prompt, list_prompts
+    from .protocol import (
+        INTERNAL_ERROR,
+        INVALID_REQUEST,
+        PARSE_ERROR,
+        JSONRPCError,
+        JSONRPCRequest,
+        JSONRPCResponse,
+    )
+except ImportError:
+    import jules_client as jules
+    import prompts
+    from handlers import HANDLERS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, TOOLS, handle_jsonrpc
+    from jules_client import AsyncJulesClient, JulesError
+    from prompts import get_prompt, list_prompts
+    from protocol import (
+        INTERNAL_ERROR,
+        INVALID_REQUEST,
+        PARSE_ERROR,
+        JSONRPCError,
+        JSONRPCRequest,
+        JSONRPCResponse,
+    )
 
-mcp = MCPServer("cloakai-jules")
+# Configure logging to sys.stderr so stdout remains a clean JSON-RPC channel
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger("jules_mcp.server")
 
-#: State values Jules reports that mean "still waiting on a human", not "finished".
-#: The API is explicit that idle is not terminal, so a client that reads `COMPLETED`
-#: as done will strand a session that is parked on a plan gate.
-GATED = {"PLAN_PENDING", "AWAITING_PLAN_APPROVAL", "FEEDBACK_PENDING", "AWAITING_FEEDBACK"}
-
-
-def _fail(exc: Exception) -> str:
-    if isinstance(exc, jules.JulesError):
-        return f"error: {exc}"
-    logging.exception("Unhandled error in Jules MCP server")
-    return "error: An internal error occurred"
+# Active SSE sessions: session_id -> asyncio.Queue[JSONRPCResponse]
+_sse_sessions: dict[str, asyncio.Queue[JSONRPCResponse]] = {}
 
 
-def _session_summary(session: dict[str, Any]) -> str:
-    """A compact, honest view of a session.
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Application lifespan manager."""
+    if not jules.api_key_present():
+        logger.warning(
+            "JULES_API_KEY is not set in environment. "
+            "Tools requiring authentication will fail until a key is configured."
+        )
+    else:
+        logger.info("Jules MCP Server initialized with configured credentials.")
+    yield
+    # Cleanup any active SSE sessions
+    _sse_sessions.clear()
 
-    Reports the state AND whether it is parked, because those are different and
-    conflating them is how a session gets abandoned mid-plan.
+
+app = FastAPI(
+    title="Google Jules MCP Server",
+    description="FastAPI-based Model Context Protocol (MCP) server for Google Jules cloud coding agents.",
+    version=SERVER_VERSION,
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def get_jules_client(
+    x_goog_api_key: str | None = Header(default=None, alias="X-Goog-Api-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> AsyncJulesClient:
+    """Dependency injection for AsyncJulesClient with request-scoped or environment auth."""
+    explicit_key: str | None = None
+    if x_goog_api_key and x_goog_api_key.strip():
+        explicit_key = x_goog_api_key.strip()
+    elif authorization and authorization.lower().startswith("bearer "):
+        explicit_key = authorization[7:].strip()
+
+    return AsyncJulesClient(api_key=explicit_key)
+
+
+# ==============================================================================
+# FastAPI Routes
+# ==============================================================================
+
+
+@app.get("/health", summary="Health check probe")
+async def health() -> dict[str, Any]:
+    """Healthcheck endpoint for container orchestration and uptime monitoring."""
+    key_ready = jules.api_key_present()
+    return {
+        "status": "healthy",
+        "server": SERVER_NAME,
+        "version": SERVER_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
+        "api_key_configured": key_ready,
+        "tool_count": len(TOOLS),
+        "prompt_count": len(list_prompts()),
+    }
+
+
+@app.get("/tools", summary="List exposed MCP tools")
+async def list_tools() -> dict[str, Any]:
+    """RESTful tool catalogue inspection."""
+    return {
+        "tools": [t.model_dump(by_alias=True) for t in TOOLS.values()]
+    }
+
+
+@app.get("/prompts", summary="List exposed MCP prompts")
+async def list_prompts_endpoint() -> dict[str, Any]:
+    """RESTful prompt catalogue inspection."""
+    return {
+        "prompts": [p.model_dump(by_alias=True) for p in list_prompts()]
+    }
+
+
+@app.post("/prompts/{name}", summary="Render an MCP prompt")
+async def render_prompt_endpoint(
+    name: str,
+    args: dict[str, str] | None = None,
+) -> JSONResponse:
+    """Render a prompt template with provided arguments."""
+    prompt_result = get_prompt(name, args or {})
+    if prompt_result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown prompt template '{name}'",
+        )
+    return JSONResponse(status_code=200, content=prompt_result.model_dump(by_alias=True))
+
+
+@app.post("/mcp", summary="Stateless JSON-RPC 2.0 MCP endpoint")
+async def mcp_endpoint(
+    request: Request,
+    client: AsyncJulesClient = Depends(get_jules_client),
+) -> JSONResponse:
+    """Stateless MCP JSON-RPC 2.0 POST endpoint.
+
+    Compatible with streamable HTTP clients, direct POST calls, and cloakai-healthcheck.sh.
     """
-    name = session.get("name", "?")
-    # The create response has no state field yet — the session exists but has not
-    # been scheduled. Printing "UNKNOWN" there reads like an error, and is the
-    # first thing a client sees, so say what it actually means.
-    state = session.get("state") or "STARTING"
-    lines = [f"session {name.removeprefix('sessions/')}  state={state}"]
+    try:
+        raw_body = await request.body()
+        if not raw_body.strip():
+            err_resp = JSONRPCResponse.make_error(None, PARSE_ERROR, "Empty request body")
+            return JSONResponse(status_code=400, content=err_resp.model_dump(by_alias=True, exclude_none=True))
 
-    if state in GATED or state == "STARTING":
-        lines.append(
-            "  PARKED: waiting on a human. Approve the plan or send guidance, "
-            "then check again. Do not treat this as finished."
+        data = json.loads(raw_body)
+    except Exception as exc:
+        err_resp = JSONRPCResponse.make_error(None, PARSE_ERROR, f"Invalid JSON payload: {exc}")
+        return JSONResponse(status_code=400, content=err_resp.model_dump(by_alias=True, exclude_none=True))
+
+    try:
+        rpc_req = JSONRPCRequest.model_validate(data)
+    except Exception as exc:
+        err_resp = JSONRPCResponse.make_error(data.get("id") if isinstance(data, dict) else None, INVALID_REQUEST, f"Invalid JSON-RPC 2.0 request: {exc}")
+        return JSONResponse(status_code=400, content=err_resp.model_dump(by_alias=True, exclude_none=True))
+
+    resp = await handle_jsonrpc(rpc_req, client)
+    return JSONResponse(status_code=200, content=resp.model_dump(by_alias=True, exclude_none=True))
+
+
+@app.get("/sse", summary="Server-Sent Events (SSE) stream")
+async def sse_endpoint(request: Request) -> StreamingResponse:
+    """Standard Model Context Protocol Server-Sent Events (SSE) transport."""
+    session_id = uuid.uuid4().hex
+    queue: asyncio.Queue[JSONRPCResponse] = asyncio.Queue()
+    _sse_sessions[session_id] = queue
+
+    logger.info("New SSE client session opened: %s", session_id)
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        try:
+            # First event according to MCP SSE transport: endpoint location
+            yield f"event: endpoint\ndata: /messages?sessionId={session_id}\n\n"
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    # Wait for next outgoing response with periodic keepalive
+                    response = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    payload = json.dumps(response.model_dump(by_alias=True, exclude_none=True))
+                    yield f"event: message\ndata: {payload}\n\n"
+                    queue.task_done()
+                except asyncio.TimeoutError:
+                    # Keepalive ping comment
+                    yield ": ping\n\n"
+        finally:
+            _sse_sessions.pop(session_id, None)
+            logger.info("SSE client session closed: %s", session_id)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/messages", summary="Intake endpoint for SSE sessions")
+async def messages_endpoint(
+    request: Request,
+    sessionId: str = Query(..., description="Active SSE session ID"),
+    client: AsyncJulesClient = Depends(get_jules_client),
+) -> JSONResponse:
+    """Message intake endpoint for clients connected via the /sse stream."""
+    if sessionId not in _sse_sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"SSE session '{sessionId}' not found or expired.",
         )
 
-    outputs = session.get("outputs") or []
-    for output in outputs:
-        pr = output.get("pullRequest")
-        if pr:
-            url = pr.get("url") or (f"{pr.get('url', '').rsplit('/pull/', 1)}"
-                                    if pr.get("url") else "")
-            lines.append(f"  pull request: {url}")
-        elif output.get("url"):
-            lines.append(f"  output: {output['url']}")
+    queue = _sse_sessions[sessionId]
 
-    source = (session.get("sourceContext") or {}).get("source")
-    lines.append(f"  source: {source or 'none (project-less sandbox)'}")
-    return "\n".join(lines)
+    try:
+        raw_body = await request.body()
+        data = json.loads(raw_body)
+        rpc_req = JSONRPCRequest.model_validate(data)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON-RPC request: {exc}")
 
+    # Process request asynchronously and dispatch response to the SSE stream
+    async def process_and_send() -> None:
+        response = await handle_jsonrpc(rpc_req, client)
+        if rpc_req.id is not None:
+            await queue.put(response)
 
-#: Activities are a union type keyed by a present field, not a field called
-#: "type". Guessing `type`/`kind` printed the literal word "activity" for every
-#: row, which told the caller nothing at all.
-_ACTIVITY_FIELDS = (
-    ("agentMessaged", "agent message"),
-    ("planGenerated", "plan generated"),
-    ("planApproved", "plan approved"),
-    ("userMessaged", "you said"),
-    ("progressUpdated", "progress"),
-)
+    asyncio.create_task(process_and_send())
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "accepted"})
 
 
-def _describe(activity: dict[str, Any]) -> tuple[str, str]:
-    """A human label and a short detail for one activity."""
-    for field, label in _ACTIVITY_FIELDS:
-        if field not in activity:
+# ==============================================================================
+# Stdio Transport Runner (Docker / CLI)
+# ==============================================================================
+
+
+async def run_stdio(client: AsyncJulesClient) -> int:
+    """Serve JSON-RPC 2.0 messages over standard input and standard output."""
+    logger.info("Serving Jules MCP over stdio...")
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
+    protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+
+    while True:
+        line_bytes = await reader.readline()
+        if not line_bytes:
+            # End of input stream (stdin closed)
+            logger.info("Stdin EOF reached. Terminating stdio server.")
+            break
+
+        line = line_bytes.decode("utf-8").strip()
+        if not line:
             continue
-        payload = activity[field] or {}
-        text = (payload.get("agentMessage") or payload.get("prompt")
-                or payload.get("message") or "")
-        text = " ".join(str(text).split())
-        if len(text) > 160:
-            text = text[:157] + "..."
-        return label, text
-    # An unrecognised activity is still worth showing by its own key, so a new
-    # Jules event type is visible rather than silently dropped.
-    unknown = [k for k in sorted(activity)
-               if k.endswith("d") and k not in ("id", "name", "createTime")]
-    return (unknown[0] if unknown else "activity"), ""
+
+        try:
+            data = json.loads(line)
+        except Exception as exc:
+            err = JSONRPCResponse.make_error(None, PARSE_ERROR, f"Parse error: {exc}")
+            sys.stdout.write(json.dumps(err.model_dump(by_alias=True, exclude_none=True)) + "\n")
+            sys.stdout.flush()
+            continue
+
+        try:
+            req = JSONRPCRequest.model_validate(data)
+        except Exception as exc:
+            err = JSONRPCResponse.make_error(
+                data.get("id") if isinstance(data, dict) else None,
+                INVALID_REQUEST,
+                f"Invalid request: {exc}",
+            )
+            sys.stdout.write(json.dumps(err.model_dump(by_alias=True, exclude_none=True)) + "\n")
+            sys.stdout.flush()
+            continue
+
+        resp = await handle_jsonrpc(req, client)
+
+        # In JSON-RPC 2.0, notifications (requests with id=None) do not receive responses
+        if req.id is not None:
+            out = json.dumps(resp.model_dump(by_alias=True, exclude_none=True))
+            sys.stdout.write(out + "\n")
+            sys.stdout.flush()
+
+    return 0
 
 
-@mcp.tool(
-    name="jules_start",
-    description="Start a Jules session, which is its own sandboxed agent. Returns "
-                "a session id to drive it with jules_send and jules_status. Omit "
-                "`source` for a project-less sandbox with no repository; pass a "
-                "repo like 'github/owner/name' to work on one. Each session counts "
-                "against a small per-account concurrency limit, so start one and "
-                "reuse it rather than starting several.",
-)
-def jules_start(
-    prompt: str,
-    source: str | None = None,
-    branch: str = "main",
-    title: str | None = None,
-    require_plan_approval: bool = False,
-) -> str:
-    try:
-        session = jules.create_session(
-            prompt, source=source, branch=branch, title=title,
-            require_plan_approval=require_plan_approval,
-        )
-    except Exception as exc:
-        return _fail(exc)
-    return _session_summary(session)
-
-
-@mcp.tool(
-    name="jules_send",
-    description="Send a message to an existing Jules session: answer a question, "
-                "steer the work, or ask for progress. Resumes a parked session.",
-)
-def jules_send(session_id: str, prompt: str) -> str:
-    try:
-        jules.send_message(session_id, prompt)
-    except Exception as exc:
-        return _fail(exc)
-    return f"sent to {session_id}. It is running again; check with jules_status."
-
-
-@mcp.tool(
-    name="jules_status",
-    description="Report a Jules session's state, whether it is parked waiting on a "
-                "human, any pull request, and its recent activity. Note that Jules "
-                "reports COMPLETED when a runner goes idle, so a session can look "
-                "finished and still be waiting for you.",
-)
-def jules_status(session_id: str, activity_limit: int = 10) -> str:
-    try:
-        session = jules.get_session(session_id)
-    except Exception as exc:
-        return _fail(exc)
-    out = [_session_summary(session)]
-
-    # The full timeline first, because the verdict needs it. A page of it cannot
-    # tell "finished" from "never looked far enough back".
-    try:
-        timeline, complete = jules.timeline(session_id)
-        out.extend(_verdict(session, timeline, complete))
-        for activity in timeline[-activity_limit:]:
-            label, detail = _describe(activity)
-            out.append(f"  - {label}" + (f": {detail}" if detail else ""))
-    except Exception as exc:
-        # Status is still useful without the timeline, so this degrades rather
-        # than discarding the part that worked.
-        out.append(f"  (activity timeline unavailable: {exc})")
-    return "\n".join(out)
-
-
-@mcp.tool(
-    name="jules_approve_plan",
-    description="Approve a Jules session's pending implementation plan. Only use "
-                "after reading it with jules_status; approving resumes the run.",
-)
-def jules_approve_plan(session_id: str, plan_id: str | None = None) -> str:
-    try:
-        jules.approve_plan(session_id, plan_id)
-    except Exception as exc:
-        return _fail(exc)
-    return f"plan approved on {session_id}; the session is running again."
-
-
-@mcp.tool(
-    name="jules_sources",
-    description="List the GitHub repositories Jules is authorised to work on.",
-)
-def jules_sources() -> str:
-    try:
-        sources = jules.list_sources()
-    except Exception as exc:
-        return _fail(exc)
-    if not sources:
-        return "no sources are connected to this Jules account."
-    lines = []
-    for source in sorted(sources, key=lambda s: s.get("name", "")):
-        # The branch is nested and wrapped in an object: a flat "defaultBranch"
-        # guess printed "?" for every repo, which reads like missing data rather
-        # than a wrong field name.
-        repo = source.get("githubRepo") or {}
-        branch = (repo.get("defaultBranch") or {}).get("displayName", "?")
-        count = len(repo.get("branches") or [])
-        name = source.get("id") or (source.get("name", "").removeprefix("sources/"))
-        lines.append(f"- {name}  (default branch: {branch}, {count} branch(es))")
-    return "\n".join(lines)
+# ==============================================================================
+# Main Entrypoint
+# ==============================================================================
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Jules Model Context Protocol (MCP) Server")
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        default="mcp",
+        choices=["mcp", "mcp-http", "run", "stdio"],
+        help="Serving mode: 'mcp' (stdio, default), 'mcp-http' (FastAPI web server), or 'stdio'",
+    )
+    parser.add_argument("--host", default=os.environ.get("CLOAKAI_HOST", "0.0.0.0"), help="Host for HTTP server")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("CLOAKAI_MCP_PORT", os.environ.get("PORT", "8081"))),
+        help="Port for HTTP server (default: 8081)",
+    )
+    parser.add_argument("--http", action="store_true", help="Force HTTP server mode")
+
+    args = parser.parse_args()
+
+    # Fail early if JULES_API_KEY is not set when running in standalone mode
     if not jules.api_key_present():
-        # Fail at startup rather than on first call: a server that lists tools it
-        # cannot serve is worse than one that refuses to start.
         print(
             "error: JULES_API_KEY is not set. Pass it per invocation:\n"
             "  docker run --rm -e JULES_API_KEY cloakai/jules mcp",
             file=sys.stderr,
         )
         return 2
-    mcp.run()
-    return 0
+
+    client = AsyncJulesClient()
+
+    if args.http or args.mode == "mcp-http":
+        try:
+            import uvicorn
+            logger.info("Starting Jules MCP FastAPI server on %s:%d...", args.host, args.port)
+            uvicorn.run(app, host=args.host, port=args.port, log_config=None)
+            return 0
+        except ImportError:
+            print("error: uvicorn is required for HTTP mode. Install with: pip install uvicorn", file=sys.stderr)
+            return 1
+    else:
+        # Default to stdio mode
+        return asyncio.run(run_stdio(client))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

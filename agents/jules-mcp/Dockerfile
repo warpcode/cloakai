@@ -1,8 +1,10 @@
-# Jules, exposed as an MCP server over stdio.
+# Jules, exposed as a CLI first and an MCP server second.
 #
 # Same contract as every other cloakai image:
 #
 #     docker run --rm -e JULES_API_KEY cloakai/jules mcp
+#     docker run --rm -e JULES_API_KEY cloakai/jules mcp --http
+#     docker run --rm -e JULES_API_KEY cloakai/jules sources
 #
 # This one is deliberately NOT built on the agent base image. Jules is a remote
 # API: there is no agent to run locally, so a 1GB docker-agent runtime and its
@@ -21,7 +23,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "mcp>=2" \
+RUN pip install --no-cache-dir "fastapi>=0.115" "uvicorn>=0.30" "pydantic>=2.0" "httpx>=0.27" "mcp>=2" \
  && useradd --create-home --shell /usr/sbin/nologin --uid 65532 jules
 
 WORKDIR /srv
@@ -31,4 +33,4 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 USER jules
 
-ENTRYPOINT ["python", "-m", "jules_mcp.server"]
+ENTRYPOINT ["python", "-m", "jules_mcp.cli"]

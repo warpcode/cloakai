@@ -35,7 +35,7 @@ echo
 # the only image here that needs internet access. Opt in with JULES=1.
 if [ "${JULES:-0}" = "1" ]; then
   echo "building cloakai/jules"
-  docker build -f agents/jules.Dockerfile -t "${JULES_IMAGE:-cloakai/jules}" "$ROOT"
+  docker build -f agents/jules-mcp/Dockerfile -t "${JULES_IMAGE:-cloakai/jules}" "$ROOT"
   echo "  built ${JULES_IMAGE:-cloakai/jules}"
   echo "  mcp (stdio): docker run --rm -e JULES_API_KEY ${JULES_IMAGE:-cloakai/jules} mcp"
 fi

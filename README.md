@@ -338,10 +338,10 @@ compiler/cloakai_compiler/
 agents/                                   the container
 ├── dev.Dockerfile                        code review and release notes
 ├── big-pickle.Dockerfile                 the free model, no credential
-├── jules.Dockerfile                      Jules as MCP over stdio
 ├── cloakai-entrypoint.sh                 run-cmd | mcp | mcp-http | shell
 ├── isolation-flags                       shared by run.sh AND the isolation tests
 └── jules-mcp/                            the Jules adapter: client, server, verdict
+    └── Dockerfile                        Jules as MCP over stdio
 
 cli/                                      the `cloakai` command
 ├── registry.py                           catalogue, argv, lifecycle
