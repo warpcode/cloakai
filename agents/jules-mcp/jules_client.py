@@ -377,15 +377,18 @@ def timeline(
     a missing marker as meaningful.
     """
     sid = _clean_sid(session_id)
+    endpoint = f"sessions/{sid}/activities"
     collected: list[dict] = []
     token = ""
     complete = True
+    params: dict[str, Any] = {"pageSize": 100}
     for _ in range(max_pages):
-        params: dict[str, Any] = {"pageSize": 100}
         if token:
             params["pageToken"] = token
-        data = call("GET", f"sessions/{sid}/activities", query_params=params, key=key, base_url=base_url)
-        collected.extend(data.get("activities", []))
+        data = call("GET", endpoint, query_params=params, key=key, base_url=base_url)
+        acts = data.get("activities")
+        if acts:
+            collected.extend(acts)
         token = data.get("nextPageToken") or ""
         if not token:
             break
