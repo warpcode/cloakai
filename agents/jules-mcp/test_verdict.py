@@ -10,8 +10,6 @@ parked session without deliberately abandoning one, and the whole point of the
 verdict is that sessions get abandoned by accident rather than on purpose.
 """
 
-from __future__ import annotations
-
 import sys
 import unittest
 from pathlib import Path
