@@ -40,8 +40,6 @@ Run both. The startup sweep is three lines and the periodic one is the safety
 net; together they are what makes a crash boring instead of a slow disk leak.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import subprocess
