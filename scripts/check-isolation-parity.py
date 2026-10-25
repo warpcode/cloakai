@@ -18,8 +18,6 @@ token after a flag is its value" heuristic turns `--read-only` into
 genuinely take a value are treated as doing so.
 """
 
-from __future__ import annotations
-
 import json
 import sys
 from pathlib import Path
