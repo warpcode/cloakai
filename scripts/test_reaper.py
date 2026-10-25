@@ -9,14 +9,14 @@ Run: python3 scripts/test_reaper.py
 Exits non-zero on any failure.
 """
 
-import importlib.util
+from importlib.util import module_from_spec, spec_from_file_location
 import sys
 import time
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-spec = importlib.util.spec_from_file_location("reaper", _HERE / "cloakai-reap.py")
-reaper = importlib.util.module_from_spec(spec)
+spec = spec_from_file_location("reaper", _HERE / "cloakai-reap.py")
+reaper = module_from_spec(spec)
 # Register before exec: @dataclass resolves its module through sys.modules, and
 # fails with a confusing error if it is not there yet.
 sys.modules["reaper"] = reaper
