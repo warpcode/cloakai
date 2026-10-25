@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -110,7 +111,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         problems.append("catalogue")
         doc = None
 
-    if reg.shutil.which("docker") is None:
+    if shutil.which("docker") is None:
         print("docker      FAIL not on PATH")
         problems.append("docker")
     else:
