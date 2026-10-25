@@ -938,8 +938,8 @@ class JulesClient:
 class AsyncJulesClient:
     """Asynchronous Jules REST client for FastAPI or async event loops.
 
-    Uses httpx.AsyncClient if available; falls back to asyncio.to_thread wrapping
-    the synchronous client without external dependencies.
+    Uses httpx.AsyncClient if available; falls back to non-blocking execution via
+    asyncio.to_thread wrapping urllib.request without blocking the event loop.
     """
 
     def __init__(
@@ -952,6 +952,7 @@ class AsyncJulesClient:
         self.base_url = base_url.rstrip("/")
         self._sync_client = JulesClient(api_key=api_key, base_url=base_url)
         self._http_client = http_client
+        self._owned_http_client = False
 
     def api_key_present(self) -> bool:
         return self._sync_client.api_key_present()
@@ -963,8 +964,13 @@ class AsyncJulesClient:
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.close()
+
+    async def close(self) -> None:
         if self._http_client is not None and hasattr(self._http_client, "aclose"):
             await self._http_client.aclose()
+            if self._owned_http_client:
+                self._http_client = None
 
     async def call(
         self,
@@ -979,7 +985,11 @@ class AsyncJulesClient:
         try:
             import httpx  # type: ignore
 
-            if self._http_client is not None and isinstance(self._http_client, httpx.AsyncClient):
+            if self._http_client is None:
+                self._http_client = httpx.AsyncClient()
+                self._owned_http_client = True
+
+            if isinstance(self._http_client, httpx.AsyncClient):
                 clean_endpoint = endpoint.strip().lstrip("/")
                 url = f"{self.base_url}/{clean_endpoint}"
                 filtered = {k: v for k, v in (query_params or {}).items() if v is not None and v != ""}
@@ -1011,15 +1021,21 @@ class AsyncJulesClient:
         page_token: str | None = None,
         filter_expr: str | None = None,
     ) -> list[dict]:
-        return await asyncio.to_thread(
-            self._sync_client.list_sources,
-            page_size=page_size,
-            page_token=page_token,
-            filter_expr=filter_expr,
-        )
+        params: dict[str, Any] = {}
+        if page_size is not None:
+            params["pageSize"] = page_size
+        if page_token is not None:
+            params["pageToken"] = page_token
+        if filter_expr is not None:
+            params["filter"] = filter_expr
+        res = await self.call("GET", "sources", query_params=params)
+        return res.get("sources", [])
 
     async def get_source(self, source_id: str) -> dict:
-        return await asyncio.to_thread(self._sync_client.get_source, source_id)
+        clean = source_id.strip()
+        if not clean.startswith("sources/"):
+            clean = f"sources/{clean}"
+        return await self.call("GET", clean)
 
     async def list_sessions(
         self,
@@ -1029,17 +1045,44 @@ class AsyncJulesClient:
         repo: str | None = None,
         max_age_days: int | None = None,
     ) -> list[dict]:
-        return await asyncio.to_thread(
-            self._sync_client.list_sessions,
-            page_size=page_size,
-            page_token=page_token,
-            filter_expr=filter_expr,
-            repo=repo,
-            max_age_days=max_age_days,
-        )
+        params: dict[str, Any] = {}
+        if page_size is not None:
+            params["pageSize"] = page_size
+        if page_token is not None:
+            params["pageToken"] = page_token
+        if filter_expr is not None:
+            params["filter"] = filter_expr
+        res = await self.call("GET", "sessions", query_params=params)
+        sessions: list[dict] = res.get("sessions", [])
+
+        if repo and sessions:
+            clean_repo = repo.strip().removeprefix("sources/").removeprefix("github/").lower()
+            sessions = [
+                s for s in sessions
+                if clean_repo in (s.get("sourceContext") or {}).get("source", "").removeprefix("sources/").removeprefix("github/").lower()
+            ]
+
+        if max_age_days is not None and max_age_days > 0 and sessions:
+            now = datetime.now(timezone.utc)
+            filtered = []
+            for s in sessions:
+                ts = s.get("createTime") or s.get("updateTime")
+                if ts:
+                    try:
+                        dt = parse_iso_datetime(ts)
+                        age_days = (now - dt).total_seconds() / 86400.0
+                        if age_days > max_age_days:
+                            continue
+                    except Exception:
+                        pass
+                filtered.append(s)
+            sessions = filtered
+
+        return sessions
 
     async def get_session(self, session_id: str) -> dict:
-        return await asyncio.to_thread(self._sync_client.get_session, session_id)
+        sid = _clean_sid(session_id)
+        return await self.call("GET", f"sessions/{sid}")
 
     async def create_session(
         self,
@@ -1050,33 +1093,57 @@ class AsyncJulesClient:
         require_plan_approval: bool | None = None,
         automation_mode: str = "AUTO_CREATE_PR",
     ) -> dict:
-        return await asyncio.to_thread(
-            self._sync_client.create_session,
-            prompt=prompt,
-            source=source,
-            branch=branch,
-            title=title,
-            require_plan_approval=require_plan_approval,
-            automation_mode=automation_mode,
-        )
+        payload: dict[str, Any] = {"prompt": prompt}
+        if automation_mode:
+            payload["automationMode"] = automation_mode
+        if source:
+            clean = source.strip()
+            if not clean.startswith("sources/"):
+                clean = f"sources/{clean}"
+            payload["sourceContext"] = {
+                "source": clean,
+                "githubRepoContext": {"startingBranch": branch},
+            }
+        if title:
+            payload["title"] = title
+        if require_plan_approval is not None:
+            payload["requirePlanApproval"] = require_plan_approval
+        return await self.call("POST", "sessions", payload=payload)
 
     async def approve_plan(self, session_id: str, plan_id: str | None = None) -> dict:
-        return await asyncio.to_thread(self._sync_client.approve_plan, session_id, plan_id=plan_id)
+        sid = _clean_sid(session_id)
+        payload: dict[str, Any] = {}
+        if plan_id:
+            payload["planId"] = plan_id
+        return await self.call("POST", f"sessions/{sid}:approvePlan", payload=payload)
 
     async def send_message(self, session_id: str, prompt: str) -> dict:
-        return await asyncio.to_thread(self._sync_client.send_message, session_id, prompt)
+        sid = _clean_sid(session_id)
+        return await self.call("POST", f"sessions/{sid}:sendMessage", payload={"prompt": prompt})
 
     async def nudge(self, session_id: str, template: str = "progress_check") -> dict:
-        return await asyncio.to_thread(self._sync_client.nudge, session_id, template=template)
+        if template not in NUDGE_TEMPLATES:
+            available = ", ".join(sorted(NUDGE_TEMPLATES.keys()))
+            raise JulesError(f"Unknown nudge template: '{template}'. Available templates: {available}")
+        return await self.send_message(session_id, NUDGE_TEMPLATES[template])
 
     async def archive_session(self, session_id: str) -> dict:
-        return await asyncio.to_thread(self._sync_client.archive_session, session_id)
+        sid = _clean_sid(session_id)
+        return await self.call("POST", f"sessions/{sid}:archive", payload={})
 
     async def unarchive_session(self, session_id: str) -> dict:
-        return await asyncio.to_thread(self._sync_client.unarchive_session, session_id)
+        sid = _clean_sid(session_id)
+        return await self.call("POST", f"sessions/{sid}:unarchive", payload={})
 
     async def delete_session(self, session_id: str, confirm: bool = False) -> dict:
-        return await asyncio.to_thread(self._sync_client.delete_session, session_id, confirm=confirm)
+        sid = _clean_sid(session_id)
+        if not confirm:
+            raise JulesError(
+                f"Refusing to permanently delete session {sid}. Deletion is IRREVERSIBLE. "
+                "To archive or close out a session, use archive_session instead. "
+                "Pass confirm=True if permanent deletion is explicitly intended."
+            )
+        return await self.call("DELETE", f"sessions/{sid}")
 
     async def list_activities(
         self,
@@ -1084,24 +1151,92 @@ class AsyncJulesClient:
         page_size: int = 20,
         page_token: str | None = None,
     ) -> dict:
-        return await asyncio.to_thread(
-            self._sync_client.list_activities,
-            session_id=session_id,
-            page_size=page_size,
-            page_token=page_token,
-        )
+        sid = _clean_sid(session_id)
+        params: dict[str, Any] = {"pageSize": page_size}
+        if page_token:
+            params["pageToken"] = page_token
+        return await self.call("GET", f"sessions/{sid}/activities", query_params=params)
 
     async def activities(self, session_id: str, page_size: int = 20) -> list[dict]:
-        return await asyncio.to_thread(self._sync_client.activities, session_id, page_size=page_size)
+        res = await self.list_activities(session_id, page_size=page_size)
+        return res.get("activities", [])
 
     async def get_activity(self, session_id: str, activity_id: str) -> dict:
-        return await asyncio.to_thread(self._sync_client.get_activity, session_id, activity_id)
+        sid = _clean_sid(session_id)
+        aid = activity_id.strip().split("/")[-1]
+        if len(aid) < 32:
+            all_acts, _ = await self.timeline(sid)
+            matches = [
+                a for a in all_acts
+                if (a.get("id") or a.get("name", "").split("/")[-1]).startswith(aid)
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            elif len(matches) > 1:
+                raise JulesError(f"Ambiguous activity ID prefix '{aid}' matches {len(matches)} activities.")
+            elif not matches:
+                raise JulesError(f"No activity matching prefix '{aid}' found in session {sid}.")
+        return await self.call("GET", f"sessions/{sid}/activities/{aid}")
 
     async def timeline(self, session_id: str, max_pages: int = 20) -> tuple[list[dict], bool]:
-        return await asyncio.to_thread(self._sync_client.timeline, session_id, max_pages=max_pages)
+        sid = _clean_sid(session_id)
+        collected: list[dict] = []
+        token = ""
+        complete = True
+        for _ in range(max_pages):
+            params: dict[str, Any] = {"pageSize": 100}
+            if token:
+                params["pageToken"] = token
+            data = await self.call("GET", f"sessions/{sid}/activities", query_params=params)
+            collected.extend(data.get("activities", []))
+            token = data.get("nextPageToken") or ""
+            if not token:
+                break
+        else:
+            complete = False
+        collected.sort(key=lambda a: a.get("createTime", ""))
+        return collected, complete
 
     async def extract_patch(self, session_id: str) -> dict[str, Any] | None:
-        return await asyncio.to_thread(self._sync_client.extract_patch, session_id)
+        sid = _clean_sid(session_id)
+        session_data = await self.get_session(sid)
+        source = (session_data.get("sourceContext") or {}).get("source", "")
+        commit_msg = "auto(jules): deliver undelivered patch"
+        patch = None
+
+        for out in session_data.get("outputs", []):
+            cs = out.get("changeSet") or {}
+            git_patch = cs.get("gitPatch") or {}
+            if git_patch.get("unidiffPatch"):
+                patch = git_patch["unidiffPatch"]
+                commit_msg = cs.get("suggestedCommitMessage") or commit_msg
+                break
+
+        if not patch:
+            try:
+                activities_list, _ = await self.timeline(sid)
+                for act in reversed(activities_list):
+                    for art in act.get("artifacts", []):
+                        cs = art.get("changeSet") or {}
+                        git_patch = cs.get("gitPatch") or {}
+                        if git_patch.get("unidiffPatch"):
+                            patch = git_patch["unidiffPatch"]
+                            commit_msg = cs.get("suggestedCommitMessage") or commit_msg
+                            break
+                    if patch:
+                        break
+            except Exception:
+                pass
+
+        if not patch:
+            return None
+
+        return {
+            "patch": patch,
+            "source": source,
+            "commit_message": commit_msg,
+            "session_id": sid,
+        }
 
     async def audit_session(
         self,
@@ -1109,9 +1244,255 @@ class AsyncJulesClient:
         stale_threshold_mins: int = 60,
         max_age_days: int = 30,
     ) -> dict[str, Any]:
-        return await asyncio.to_thread(
-            self._sync_client.audit_session,
-            session_data=session_data,
-            stale_threshold_mins=stale_threshold_mins,
-            max_age_days=max_age_days,
-        )
+        sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+        if "state" not in session_data and sid:
+            try:
+                session_data = await self.get_session(sid)
+            except Exception:
+                pass
+
+        raw_title = session_data.get("title") or session_data.get("prompt", "")
+        title = " ".join(raw_title.split())[:60]
+        state = session_data.get("state", "UNKNOWN")
+        source_ctx = session_data.get("sourceContext") or {}
+        source_name = source_ctx.get("source", "").removeprefix("sources/")
+        branch = (source_ctx.get("githubRepoContext") or {}).get("startingBranch", "")
+
+        created_time = session_data.get("createTime", "")
+        updated_time = session_data.get("updateTime", "")
+
+        pr_url = ""
+        for out in session_data.get("outputs", []):
+            if "pullRequest" in out:
+                pr_url = (out["pullRequest"] or {}).get("url", "")
+                break
+
+        activities_list: list[dict[str, Any]] = []
+        is_timeline_complete = True
+        if "activities" in session_data and isinstance(session_data["activities"], list):
+            activities_list = session_data["activities"]
+        elif sid:
+            if state == "COMPLETED" and pr_url:
+                activities_list = []
+                is_timeline_complete = True
+            else:
+                try:
+                    activities_list, is_timeline_complete = await self.timeline(sid)
+                except Exception:
+                    activities_list = []
+                    is_timeline_complete = False
+
+        now = datetime.now(timezone.utc)
+        prompt = session_data.get("prompt", "").strip()
+
+        conversation_history: list[dict[str, Any]] = []
+        code_reviews: list[dict[str, Any]] = []
+        plans: list[dict[str, Any]] = []
+        pending_plan_id = ""
+        user_message_count = 0
+        agent_message_count = 0
+        unanswered_user_messages = 0
+        last_user_message = ""
+        last_user_time = ""
+        last_agent_message = ""
+        last_agent_time = ""
+
+        if prompt:
+            conversation_history.append({
+                "role": "user",
+                "type": "prompt",
+                "time": created_time,
+                "id": "initial-prompt",
+                "content": prompt,
+            })
+            user_message_count += 1
+            unanswered_user_messages += 1
+            last_user_message = prompt
+            last_user_time = created_time
+
+        for a in activities_list:
+            t = a.get("createTime", "")
+            aid = a.get("id", "")
+
+            if "planGenerated" in a:
+                p = (a["planGenerated"] or {}).get("plan", {})
+                pid = p.get("id", "")
+                steps = [s.get("title", "") for s in p.get("steps", [])]
+                plans.append({"id": pid, "time": t, "steps": steps})
+                pending_plan_id = pid
+                conversation_history.append({
+                    "role": "agent",
+                    "type": "plan_generated",
+                    "time": t,
+                    "id": aid,
+                    "content": f"Generated plan '{pid}' with {len(steps)} steps.",
+                    "plan": p,
+                })
+
+            if "planApproved" in a:
+                pid = (a["planApproved"] or {}).get("planId", "")
+                pending_plan_id = ""
+                conversation_history.append({
+                    "role": "user",
+                    "type": "plan_approved",
+                    "time": t,
+                    "id": aid,
+                    "content": f"Plan '{pid}' approved.",
+                })
+
+            if "progressUpdated" in a:
+                pending_plan_id = ""
+                pu = a["progressUpdated"] or {}
+                pu_title = pu.get("title", "")
+                pu_desc = pu.get("description", "")
+                if "reviewed" in pu_title.lower() or "review" in pu_desc.lower():
+                    code_reviews.append({"time": t, "title": pu_title, "description": pu_desc})
+                    conversation_history.append({
+                        "role": "agent",
+                        "type": "code_review",
+                        "time": t,
+                        "id": aid,
+                        "content": f"Code review: {pu_title}",
+                        "review": pu,
+                    })
+
+            if "userMessaged" in a:
+                user_msg = (a["userMessaged"] or {}).get("userMessage", "").strip()
+                user_message_count += 1
+                unanswered_user_messages += 1
+                last_user_message = user_msg
+                last_user_time = t
+                conversation_history.append({
+                    "role": "user",
+                    "type": "message",
+                    "time": t,
+                    "id": aid,
+                    "content": user_msg,
+                })
+
+            if "agentMessaged" in a:
+                agent_msg = (a["agentMessaged"] or {}).get("agentMessage", "").strip()
+                agent_message_count += 1
+                unanswered_user_messages = 0
+                last_agent_message = agent_msg
+                last_agent_time = t
+                conversation_history.append({
+                    "role": "agent",
+                    "type": "message",
+                    "time": t,
+                    "id": aid,
+                    "content": agent_msg,
+                })
+
+            if "sessionCompleted" in a:
+                conversation_history.append({
+                    "role": "system",
+                    "type": "session_completed",
+                    "time": t,
+                    "id": aid,
+                    "content": "Session completed.",
+                })
+
+        last_speaker = conversation_history[-1]["role"] if conversation_history else "none"
+        agent_awaiting_reply = False
+        if last_speaker == "agent" and last_agent_message:
+            lower_msg = last_agent_message.lower()
+            if any(q in lower_msg for q in ["confirm", "approve", "proceed", "look good", "?", "let me know", "feedback"]):
+                agent_awaiting_reply = True
+
+        latest_activity_time = updated_time
+        latest_type = "none"
+        latest_detail = ""
+        if activities_list:
+            latest = activities_list[-1]
+            latest_activity_time = latest.get("createTime", updated_time)
+            type_keys = [k for k in latest.keys() if k not in ("id", "name", "createTime", "originator")]
+            latest_type = type_keys[0] if type_keys else "unknown"
+            if "agentMessaged" in latest:
+                latest_detail = (latest["agentMessaged"] or {}).get("agentMessage", "")[:120].strip()
+            elif "userMessaged" in latest:
+                latest_detail = f"User: {(latest['userMessaged'] or {}).get('userMessage', '')[:100].strip()}"
+            elif "planGenerated" in latest:
+                p = (latest["planGenerated"] or {}).get("plan", {})
+                latest_detail = f"Plan: {len(p.get('steps', []))} steps"
+            elif "progressUpdated" in latest:
+                latest_detail = (latest["progressUpdated"] or {}).get("title", "")
+            elif "sessionCompleted" in latest:
+                latest_detail = "Session completed"
+
+        inactive_mins = 0.0
+        if latest_activity_time:
+            try:
+                act_dt = parse_iso_datetime(latest_activity_time)
+                inactive_mins = max(0.0, (now - act_dt).total_seconds() / 60.0)
+            except Exception:
+                pass
+
+        created_str = created_time or updated_time
+        age_days = 0.0
+        if created_str:
+            try:
+                c_dt = parse_iso_datetime(created_str)
+                age_days = max(0.0, (now - c_dt).total_seconds() / 86400.0)
+            except Exception:
+                pass
+
+        is_inactive = bool(max_age_days is not None and max_age_days > 0 and age_days > max_age_days)
+
+        if is_inactive:
+            assessment = "INACTIVE"
+        elif pr_url:
+            assessment = "COMPLETED_WITH_PR"
+        elif state == "AWAITING_PLAN_APPROVAL" or (pending_plan_id and state not in ("FAILED",)):
+            assessment = "AWAITING_PLAN_APPROVAL"
+        elif state == "AWAITING_USER_FEEDBACK" or (agent_awaiting_reply and state not in ("FAILED",)):
+            assessment = "AWAITING_USER_FEEDBACK"
+        elif state == "IN_PROGRESS":
+            if unanswered_user_messages > 0 and inactive_mins >= 15:
+                assessment = "STALLED"
+            elif inactive_mins >= stale_threshold_mins:
+                assessment = "STALLED"
+            else:
+                assessment = "ACTIVE"
+        elif state == "COMPLETED":
+            if unanswered_user_messages > 0:
+                assessment = "STALLED"
+            else:
+                assessment = "COMPLETED_NO_OUTPUT"
+        else:
+            assessment = state
+
+        verdict_lines = _verdict(session_data, activities_list, is_timeline_complete)
+
+        return {
+            "id": sid,
+            "title": title,
+            "state": state,
+            "assessment": assessment,
+            "verdict": verdict_lines,
+            "source": source_name,
+            "branch": branch,
+            "created_time": created_time,
+            "updated_time": updated_time,
+            "latest_activity_time": latest_activity_time,
+            "inactive_mins": round(inactive_mins, 1),
+            "age_days": round(age_days, 1),
+            "is_inactive": is_inactive,
+            "activity_count": len(activities_list),
+            "latest_type": latest_type,
+            "latest_detail": latest_detail,
+            "pending_plan_id": pending_plan_id,
+            "pull_request_url": pr_url,
+            "conversation_history": conversation_history,
+            "user_message_count": user_message_count,
+            "agent_message_count": agent_message_count,
+            "unanswered_user_messages": unanswered_user_messages,
+            "agent_awaiting_reply": agent_awaiting_reply,
+            "last_speaker": last_speaker,
+            "last_user_message": last_user_message,
+            "last_user_time": last_user_time,
+            "last_agent_message": last_agent_message,
+            "last_agent_time": last_agent_time,
+            "code_reviews": code_reviews,
+            "plans": plans,
+        }
