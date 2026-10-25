@@ -13,7 +13,7 @@ import json
 import os
 import re
 from typing import Any
-import urllib.error
+from urllib.error import HTTPError, URLError
 import urllib.parse
 import urllib.request
 
@@ -110,12 +110,12 @@ def call(
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
+    except HTTPError as exc:
         # Surface Google's message, never our own request, which carries the key
         # in a header. The body of an error is safe; the request is not.
         detail = exc.read().decode(errors="replace")[:500]
         raise JulesError(f"Jules API {exc.code} on {method} {endpoint}: {detail}") from None
-    except urllib.error.URLError as exc:
+    except URLError as exc:
         raise JulesError(f"cannot reach Jules: {exc.reason}") from None
 
     return json.loads(raw) if raw.strip() else {}
