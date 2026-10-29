@@ -94,5 +94,5 @@ and what will break, so lead with that.
 
 ## Never
 
-Invent a version number, a date, or a contributor. If they were not given to you, leave a `TODO`
+Invent a version number, a date, or a contributor. If they were not given to you, leave a placeholder (e.g., `[TODO]` or `[Unreleased]`)
 rather than guessing.
