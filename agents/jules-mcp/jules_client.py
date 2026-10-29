@@ -808,6 +808,40 @@ def audit_session(
     }
 
 
+def audit_sessions(
+    sessions: list[dict[str, Any]],
+    stale_threshold_mins: int = 60,
+    max_age_days: int = 30,
+    key: str | None = None,
+    base_url: str = BASE,
+    max_workers: int = 10,
+) -> list[dict[str, Any]]:
+    """Audit multiple sessions concurrently."""
+    active_sessions = [s for s in sessions if s.get("archived") is not True]
+    if not active_sessions:
+        return []
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _audit(s: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            return audit_session(
+                s,
+                stale_threshold_mins=stale_threshold_mins,
+                max_age_days=max_age_days,
+                key=key,
+                base_url=base_url,
+            )
+        except Exception:
+            return None
+
+    workers = min(max_workers, len(active_sessions))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(_audit, active_sessions))
+
+    return [r for r in results if r is not None]
+
+
 class JulesClient:
     """Synchronous Jules REST API client (v1alpha)."""
 
@@ -933,6 +967,35 @@ class JulesClient:
             key=self._key,
             base_url=self.base_url,
         )
+
+    def audit_sessions(
+        self,
+        sessions: list[dict[str, Any]],
+        stale_threshold_mins: int = 60,
+        max_age_days: int = 30,
+        max_workers: int = 10,
+    ) -> list[dict[str, Any]]:
+        active_sessions = [s for s in sessions if s.get("archived") is not True]
+        if not active_sessions:
+            return []
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _audit(s: dict[str, Any]) -> dict[str, Any] | None:
+            try:
+                return self.audit_session(
+                    s,
+                    stale_threshold_mins=stale_threshold_mins,
+                    max_age_days=max_age_days,
+                )
+            except Exception:
+                return None
+
+        workers = min(max_workers, len(active_sessions))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            results = list(executor.map(_audit, active_sessions))
+
+        return [r for r in results if r is not None]
 
 
 class AsyncJulesClient:
@@ -1496,3 +1559,26 @@ class AsyncJulesClient:
             "code_reviews": code_reviews,
             "plans": plans,
         }
+
+    async def audit_sessions(
+        self,
+        sessions: list[dict[str, Any]],
+        stale_threshold_mins: int = 60,
+        max_age_days: int = 30,
+    ) -> list[dict[str, Any]]:
+        active_sessions = [s for s in sessions if s.get("archived") is not True]
+        if not active_sessions:
+            return []
+
+        async def _audit(s: dict[str, Any]) -> dict[str, Any] | None:
+            try:
+                return await self.audit_session(
+                    s,
+                    stale_threshold_mins=stale_threshold_mins,
+                    max_age_days=max_age_days,
+                )
+            except Exception:
+                return None
+
+        results = await asyncio.gather(*[_audit(s) for s in active_sessions])
+        return [r for r in results if r is not None]

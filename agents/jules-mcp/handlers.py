@@ -390,19 +390,20 @@ async def handle_jules_audit(args: dict[str, Any], client: AsyncJulesClient) -> 
         if not sessions:
             return CallToolResult.text("No active sessions found within audit window.")
 
+        audits = await client.audit_sessions(
+            sessions,
+            stale_threshold_mins=params.stale_threshold_mins,
+            max_age_days=params.max_age_days,
+        )
+        if not audits:
+            return CallToolResult.text("No active sessions found within audit window.")
+
         lines = [
             "## Jules Sessions Health Audit\n",
             "| Session ID | State | Assessment | Inactive (m) | PR | Title |",
             "|---|---|---|---|---|---|",
         ]
-        for s in sessions:
-            if s.get("archived") is True:
-                continue
-            audit = await client.audit_session(
-                s,
-                stale_threshold_mins=params.stale_threshold_mins,
-                max_age_days=params.max_age_days,
-            )
+        for audit in audits:
             sid = audit["id"]
             state = audit["state"]
             assess = audit["assessment"]
