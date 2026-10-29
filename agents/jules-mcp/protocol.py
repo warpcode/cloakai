@@ -10,7 +10,7 @@ Defines schemas for:
 
 from __future__ import annotations
 
-from enum import Enum, IntEnum
+from enum import IntEnum
 from typing import Any, Literal
 
 from pydantic import (
