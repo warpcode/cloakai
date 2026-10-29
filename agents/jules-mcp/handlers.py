@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Callable, Coroutine
@@ -395,14 +396,22 @@ async def handle_jules_audit(args: dict[str, Any], client: AsyncJulesClient) -> 
             "| Session ID | State | Assessment | Inactive (m) | PR | Title |",
             "|---|---|---|---|---|---|",
         ]
-        for s in sessions:
-            if s.get("archived") is True:
-                continue
-            audit = await client.audit_session(
-                s,
-                stale_threshold_mins=params.stale_threshold_mins,
-                max_age_days=params.max_age_days,
+        active_sessions = [s for s in sessions if s.get("archived") is not True]
+        if not active_sessions:
+            return CallToolResult.text("No active sessions found within audit window.")
+
+        audits = await asyncio.gather(
+            *(
+                client.audit_session(
+                    s,
+                    stale_threshold_mins=params.stale_threshold_mins,
+                    max_age_days=params.max_age_days,
+                )
+                for s in active_sessions
             )
+        )
+
+        for audit in audits:
             sid = audit["id"]
             state = audit["state"]
             assess = audit["assessment"]

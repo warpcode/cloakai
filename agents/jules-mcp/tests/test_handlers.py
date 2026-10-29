@@ -115,6 +115,38 @@ class TestHandlers(unittest.TestCase):
         self.assertTrue(res.result["isError"])
         self.assertIn("Refusing to delete", res.result["content"][0]["text"])
 
+    def test_call_tool_jules_audit(self):
+        self.mock_client.list_sessions.return_value = [
+            {"id": "s1", "state": "IN_PROGRESS", "title": "Session 1", "archived": False},
+            {"id": "s2", "state": "COMPLETED", "title": "Session 2", "archived": True},
+            {"id": "s3", "state": "COMPLETED", "title": "Session 3", "archived": False},
+        ]
+        self.mock_client.audit_session.side_effect = lambda s, **kwargs: {
+            "id": s["id"],
+            "state": s["state"],
+            "assessment": "ACTIVE" if s["id"] == "s1" else "COMPLETED_WITH_PR",
+            "inactive_mins": 10.0,
+            "pull_request_url": "http://pr" if s["id"] == "s3" else "",
+            "title": s["title"],
+        }
+        req = JSONRPCRequest(
+            id=13,
+            method="tools/call",
+            params={
+                "name": "jules_audit",
+                "arguments": {},
+            },
+        )
+        res = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertEqual(res.id, 13)
+        self.assertFalse(res.result["isError"])
+        content = res.result["content"][0]["text"]
+        self.assertIn("Jules Sessions Health Audit", content)
+        self.assertIn("`s1`", content)
+        self.assertNotIn("`s2`", content)
+        self.assertIn("`s3`", content)
+        self.assertEqual(self.mock_client.audit_session.call_count, 2)
+
     def test_call_tool_jules_get_patch(self):
         self.mock_client.extract_patch.return_value = {
             "patch": "--- a/foo\n+++ b/foo\n@@ -1 +1 @@\n-bar\n+baz\n",
