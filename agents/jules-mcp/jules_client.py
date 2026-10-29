@@ -546,55 +546,20 @@ def _verdict(session: dict[str, Any], timeline: list[dict], complete: bool = Tru
     return lines
 
 
-def audit_session(
-    session_data: dict[str, Any],
-    stale_threshold_mins: int = 60,
-    max_age_days: int = 30,
-    key: str | None = None,
-    base_url: str = BASE,
-) -> dict[str, Any]:
-    """Evaluate session state, activities, and return diagnostic metrics including assessment and verdict."""
-    sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
-    if "state" not in session_data and sid:
-        try:
-            session_data = get_session(sid, key=key, base_url=base_url)
-        except Exception:
-            pass
-
-    raw_title = session_data.get("title") or session_data.get("prompt", "")
-    title = " ".join(raw_title.split())[:60]
-    state = session_data.get("state", "UNKNOWN")
-    source_ctx = session_data.get("sourceContext") or {}
-    source_name = source_ctx.get("source", "").removeprefix("sources/")
-    branch = (source_ctx.get("githubRepoContext") or {}).get("startingBranch", "")
-
-    created_time = session_data.get("createTime", "")
-    updated_time = session_data.get("updateTime", "")
-
-    pr_url = ""
+def _extract_session_pr_url(session_data: dict[str, Any]) -> str:
+    """Extract pull request URL from session outputs if present."""
     for out in session_data.get("outputs", []):
         if "pullRequest" in out:
-            pr_url = (out["pullRequest"] or {}).get("url", "")
-            break
+            return (out["pullRequest"] or {}).get("url", "")
+    return ""
 
-    activities_list: list[dict[str, Any]] = []
-    is_timeline_complete = True
-    if "activities" in session_data and isinstance(session_data["activities"], list):
-        activities_list = session_data["activities"]
-    elif sid:
-        if state == "COMPLETED" and pr_url:
-            activities_list = []
-            is_timeline_complete = True
-        else:
-            try:
-                activities_list, is_timeline_complete = timeline(sid, key=key, base_url=base_url)
-            except Exception:
-                activities_list = []
-                is_timeline_complete = False
 
-    now = datetime.now(timezone.utc)
-    prompt = session_data.get("prompt", "").strip()
-
+def _process_activities(
+    prompt: str,
+    created_time: str,
+    activities_list: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Parse activities timeline into conversation history, reviews, plans, and message counts."""
     conversation_history: list[dict[str, Any]] = []
     code_reviews: list[dict[str, Any]] = []
     plans: list[dict[str, Any]] = []
@@ -710,26 +675,111 @@ def audit_session(
         if any(q in lower_msg for q in ["confirm", "approve", "proceed", "look good", "?", "let me know", "feedback"]):
             agent_awaiting_reply = True
 
-    latest_activity_time = updated_time
-    latest_type = "none"
-    latest_detail = ""
-    if activities_list:
-        latest = activities_list[-1]
-        latest_activity_time = latest.get("createTime", updated_time)
-        type_keys = [k for k in latest.keys() if k not in ("id", "name", "createTime", "originator")]
-        latest_type = type_keys[0] if type_keys else "unknown"
-        if "agentMessaged" in latest:
-            latest_detail = (latest["agentMessaged"] or {}).get("agentMessage", "")[:120].strip()
-        elif "userMessaged" in latest:
-            latest_detail = f"User: {(latest['userMessaged'] or {}).get('userMessage', '')[:100].strip()}"
-        elif "planGenerated" in latest:
-            p = (latest["planGenerated"] or {}).get("plan", {})
-            latest_detail = f"Plan: {len(p.get('steps', []))} steps"
-        elif "progressUpdated" in latest:
-            latest_detail = (latest["progressUpdated"] or {}).get("title", "")
-        elif "sessionCompleted" in latest:
-            latest_detail = "Session completed"
+    return {
+        "conversation_history": conversation_history,
+        "code_reviews": code_reviews,
+        "plans": plans,
+        "pending_plan_id": pending_plan_id,
+        "user_message_count": user_message_count,
+        "agent_message_count": agent_message_count,
+        "unanswered_user_messages": unanswered_user_messages,
+        "agent_awaiting_reply": agent_awaiting_reply,
+        "last_speaker": last_speaker,
+        "last_user_message": last_user_message,
+        "last_user_time": last_user_time,
+        "last_agent_message": last_agent_message,
+        "last_agent_time": last_agent_time,
+    }
 
+
+def _extract_latest_activity_info(
+    activities_list: list[dict[str, Any]],
+    updated_time: str,
+) -> tuple[str, str, str]:
+    """Extract latest activity timestamp, type, and short detail summary."""
+    if not activities_list:
+        return updated_time, "none", ""
+
+    latest = activities_list[-1]
+    latest_activity_time = latest.get("createTime", updated_time)
+    type_keys = [k for k in latest.keys() if k not in ("id", "name", "createTime", "originator")]
+    latest_type = type_keys[0] if type_keys else "unknown"
+
+    latest_detail = ""
+    if "agentMessaged" in latest:
+        latest_detail = (latest["agentMessaged"] or {}).get("agentMessage", "")[:120].strip()
+    elif "userMessaged" in latest:
+        latest_detail = f"User: {(latest['userMessaged'] or {}).get('userMessage', '')[:100].strip()}"
+    elif "planGenerated" in latest:
+        p = (latest["planGenerated"] or {}).get("plan", {})
+        latest_detail = f"Plan: {len(p.get('steps', []))} steps"
+    elif "progressUpdated" in latest:
+        latest_detail = (latest["progressUpdated"] or {}).get("title", "")
+    elif "sessionCompleted" in latest:
+        latest_detail = "Session completed"
+
+    return latest_activity_time, latest_type, latest_detail
+
+
+def _determine_assessment(
+    is_inactive: bool,
+    pr_url: str,
+    state: str,
+    pending_plan_id: str,
+    agent_awaiting_reply: bool,
+    unanswered_user_messages: int,
+    inactive_mins: float,
+    stale_threshold_mins: int,
+) -> str:
+    """Determine high-level session status assessment."""
+    if is_inactive:
+        return "INACTIVE"
+    if pr_url:
+        return "COMPLETED_WITH_PR"
+    if state == "AWAITING_PLAN_APPROVAL" or (pending_plan_id and state not in ("FAILED",)):
+        return "AWAITING_PLAN_APPROVAL"
+    if state == "AWAITING_USER_FEEDBACK" or (agent_awaiting_reply and state not in ("FAILED",)):
+        return "AWAITING_USER_FEEDBACK"
+    if state == "IN_PROGRESS":
+        if unanswered_user_messages > 0 and inactive_mins >= 15:
+            return "STALLED"
+        if inactive_mins >= stale_threshold_mins:
+            return "STALLED"
+        return "ACTIVE"
+    if state == "COMPLETED":
+        if unanswered_user_messages > 0:
+            return "STALLED"
+        return "COMPLETED_NO_OUTPUT"
+    return state
+
+
+def _audit_session_data(
+    session_data: dict[str, Any],
+    activities_list: list[dict[str, Any]],
+    is_timeline_complete: bool,
+    stale_threshold_mins: int = 60,
+    max_age_days: int = 30,
+) -> dict[str, Any]:
+    """Pure analysis of session_data and activities_list to return diagnostic metrics."""
+    sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+    raw_title = session_data.get("title") or session_data.get("prompt", "")
+    title = " ".join(raw_title.split())[:60]
+    state = session_data.get("state", "UNKNOWN")
+    source_ctx = session_data.get("sourceContext") or {}
+    source_name = source_ctx.get("source", "").removeprefix("sources/")
+    branch = (source_ctx.get("githubRepoContext") or {}).get("startingBranch", "")
+
+    created_time = session_data.get("createTime", "")
+    updated_time = session_data.get("updateTime", "")
+
+    pr_url = _extract_session_pr_url(session_data)
+    prompt = session_data.get("prompt", "").strip()
+
+    proc = _process_activities(prompt, created_time, activities_list)
+
+    latest_activity_time, latest_type, latest_detail = _extract_latest_activity_info(activities_list, updated_time)
+
+    now = datetime.now(timezone.utc)
     inactive_mins = 0.0
     if latest_activity_time:
         try:
@@ -749,28 +799,16 @@ def audit_session(
 
     is_inactive = bool(max_age_days is not None and max_age_days > 0 and age_days > max_age_days)
 
-    if is_inactive:
-        assessment = "INACTIVE"
-    elif pr_url:
-        assessment = "COMPLETED_WITH_PR"
-    elif state == "AWAITING_PLAN_APPROVAL" or (pending_plan_id and state not in ("FAILED",)):
-        assessment = "AWAITING_PLAN_APPROVAL"
-    elif state == "AWAITING_USER_FEEDBACK" or (agent_awaiting_reply and state not in ("FAILED",)):
-        assessment = "AWAITING_USER_FEEDBACK"
-    elif state == "IN_PROGRESS":
-        if unanswered_user_messages > 0 and inactive_mins >= 15:
-            assessment = "STALLED"
-        elif inactive_mins >= stale_threshold_mins:
-            assessment = "STALLED"
-        else:
-            assessment = "ACTIVE"
-    elif state == "COMPLETED":
-        if unanswered_user_messages > 0:
-            assessment = "STALLED"
-        else:
-            assessment = "COMPLETED_NO_OUTPUT"
-    else:
-        assessment = state
+    assessment = _determine_assessment(
+        is_inactive=is_inactive,
+        pr_url=pr_url,
+        state=state,
+        pending_plan_id=proc["pending_plan_id"],
+        agent_awaiting_reply=proc["agent_awaiting_reply"],
+        unanswered_user_messages=proc["unanswered_user_messages"],
+        inactive_mins=inactive_mins,
+        stale_threshold_mins=stale_threshold_mins,
+    )
 
     verdict_lines = _verdict(session_data, activities_list, is_timeline_complete)
 
@@ -791,21 +829,63 @@ def audit_session(
         "activity_count": len(activities_list),
         "latest_type": latest_type,
         "latest_detail": latest_detail,
-        "pending_plan_id": pending_plan_id,
+        "pending_plan_id": proc["pending_plan_id"],
         "pull_request_url": pr_url,
-        "conversation_history": conversation_history,
-        "user_message_count": user_message_count,
-        "agent_message_count": agent_message_count,
-        "unanswered_user_messages": unanswered_user_messages,
-        "agent_awaiting_reply": agent_awaiting_reply,
-        "last_speaker": last_speaker,
-        "last_user_message": last_user_message,
-        "last_user_time": last_user_time,
-        "last_agent_message": last_agent_message,
-        "last_agent_time": last_agent_time,
-        "code_reviews": code_reviews,
-        "plans": plans,
+        "conversation_history": proc["conversation_history"],
+        "user_message_count": proc["user_message_count"],
+        "agent_message_count": proc["agent_message_count"],
+        "unanswered_user_messages": proc["unanswered_user_messages"],
+        "agent_awaiting_reply": proc["agent_awaiting_reply"],
+        "last_speaker": proc["last_speaker"],
+        "last_user_message": proc["last_user_message"],
+        "last_user_time": proc["last_user_time"],
+        "last_agent_message": proc["last_agent_message"],
+        "last_agent_time": proc["last_agent_time"],
+        "code_reviews": proc["code_reviews"],
+        "plans": proc["plans"],
     }
+
+
+def audit_session(
+    session_data: dict[str, Any],
+    stale_threshold_mins: int = 60,
+    max_age_days: int = 30,
+    key: str | None = None,
+    base_url: str = BASE,
+) -> dict[str, Any]:
+    """Evaluate session state, activities, and return diagnostic metrics including assessment and verdict."""
+    sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+    if "state" not in session_data and sid:
+        try:
+            session_data = get_session(sid, key=key, base_url=base_url)
+        except Exception:
+            pass
+
+    pr_url = _extract_session_pr_url(session_data)
+    state = session_data.get("state", "UNKNOWN")
+
+    activities_list: list[dict[str, Any]] = []
+    is_timeline_complete = True
+    if "activities" in session_data and isinstance(session_data["activities"], list):
+        activities_list = session_data["activities"]
+    elif sid:
+        if state == "COMPLETED" and pr_url:
+            activities_list = []
+            is_timeline_complete = True
+        else:
+            try:
+                activities_list, is_timeline_complete = timeline(sid, key=key, base_url=base_url)
+            except Exception:
+                activities_list = []
+                is_timeline_complete = False
+
+    return _audit_session_data(
+        session_data,
+        activities_list,
+        is_timeline_complete,
+        stale_threshold_mins=stale_threshold_mins,
+        max_age_days=max_age_days,
+    )
 
 
 class JulesClient:
@@ -1251,21 +1331,8 @@ class AsyncJulesClient:
             except Exception:
                 pass
 
-        raw_title = session_data.get("title") or session_data.get("prompt", "")
-        title = " ".join(raw_title.split())[:60]
+        pr_url = _extract_session_pr_url(session_data)
         state = session_data.get("state", "UNKNOWN")
-        source_ctx = session_data.get("sourceContext") or {}
-        source_name = source_ctx.get("source", "").removeprefix("sources/")
-        branch = (source_ctx.get("githubRepoContext") or {}).get("startingBranch", "")
-
-        created_time = session_data.get("createTime", "")
-        updated_time = session_data.get("updateTime", "")
-
-        pr_url = ""
-        for out in session_data.get("outputs", []):
-            if "pullRequest" in out:
-                pr_url = (out["pullRequest"] or {}).get("url", "")
-                break
 
         activities_list: list[dict[str, Any]] = []
         is_timeline_complete = True
@@ -1282,217 +1349,10 @@ class AsyncJulesClient:
                     activities_list = []
                     is_timeline_complete = False
 
-        now = datetime.now(timezone.utc)
-        prompt = session_data.get("prompt", "").strip()
-
-        conversation_history: list[dict[str, Any]] = []
-        code_reviews: list[dict[str, Any]] = []
-        plans: list[dict[str, Any]] = []
-        pending_plan_id = ""
-        user_message_count = 0
-        agent_message_count = 0
-        unanswered_user_messages = 0
-        last_user_message = ""
-        last_user_time = ""
-        last_agent_message = ""
-        last_agent_time = ""
-
-        if prompt:
-            conversation_history.append({
-                "role": "user",
-                "type": "prompt",
-                "time": created_time,
-                "id": "initial-prompt",
-                "content": prompt,
-            })
-            user_message_count += 1
-            unanswered_user_messages += 1
-            last_user_message = prompt
-            last_user_time = created_time
-
-        for a in activities_list:
-            t = a.get("createTime", "")
-            aid = a.get("id", "")
-
-            if "planGenerated" in a:
-                p = (a["planGenerated"] or {}).get("plan", {})
-                pid = p.get("id", "")
-                steps = [s.get("title", "") for s in p.get("steps", [])]
-                plans.append({"id": pid, "time": t, "steps": steps})
-                pending_plan_id = pid
-                conversation_history.append({
-                    "role": "agent",
-                    "type": "plan_generated",
-                    "time": t,
-                    "id": aid,
-                    "content": f"Generated plan '{pid}' with {len(steps)} steps.",
-                    "plan": p,
-                })
-
-            if "planApproved" in a:
-                pid = (a["planApproved"] or {}).get("planId", "")
-                pending_plan_id = ""
-                conversation_history.append({
-                    "role": "user",
-                    "type": "plan_approved",
-                    "time": t,
-                    "id": aid,
-                    "content": f"Plan '{pid}' approved.",
-                })
-
-            if "progressUpdated" in a:
-                pending_plan_id = ""
-                pu = a["progressUpdated"] or {}
-                pu_title = pu.get("title", "")
-                pu_desc = pu.get("description", "")
-                if "reviewed" in pu_title.lower() or "review" in pu_desc.lower():
-                    code_reviews.append({"time": t, "title": pu_title, "description": pu_desc})
-                    conversation_history.append({
-                        "role": "agent",
-                        "type": "code_review",
-                        "time": t,
-                        "id": aid,
-                        "content": f"Code review: {pu_title}",
-                        "review": pu,
-                    })
-
-            if "userMessaged" in a:
-                user_msg = (a["userMessaged"] or {}).get("userMessage", "").strip()
-                user_message_count += 1
-                unanswered_user_messages += 1
-                last_user_message = user_msg
-                last_user_time = t
-                conversation_history.append({
-                    "role": "user",
-                    "type": "message",
-                    "time": t,
-                    "id": aid,
-                    "content": user_msg,
-                })
-
-            if "agentMessaged" in a:
-                agent_msg = (a["agentMessaged"] or {}).get("agentMessage", "").strip()
-                agent_message_count += 1
-                unanswered_user_messages = 0
-                last_agent_message = agent_msg
-                last_agent_time = t
-                conversation_history.append({
-                    "role": "agent",
-                    "type": "message",
-                    "time": t,
-                    "id": aid,
-                    "content": agent_msg,
-                })
-
-            if "sessionCompleted" in a:
-                conversation_history.append({
-                    "role": "system",
-                    "type": "session_completed",
-                    "time": t,
-                    "id": aid,
-                    "content": "Session completed.",
-                })
-
-        last_speaker = conversation_history[-1]["role"] if conversation_history else "none"
-        agent_awaiting_reply = False
-        if last_speaker == "agent" and last_agent_message:
-            lower_msg = last_agent_message.lower()
-            if any(q in lower_msg for q in ["confirm", "approve", "proceed", "look good", "?", "let me know", "feedback"]):
-                agent_awaiting_reply = True
-
-        latest_activity_time = updated_time
-        latest_type = "none"
-        latest_detail = ""
-        if activities_list:
-            latest = activities_list[-1]
-            latest_activity_time = latest.get("createTime", updated_time)
-            type_keys = [k for k in latest.keys() if k not in ("id", "name", "createTime", "originator")]
-            latest_type = type_keys[0] if type_keys else "unknown"
-            if "agentMessaged" in latest:
-                latest_detail = (latest["agentMessaged"] or {}).get("agentMessage", "")[:120].strip()
-            elif "userMessaged" in latest:
-                latest_detail = f"User: {(latest['userMessaged'] or {}).get('userMessage', '')[:100].strip()}"
-            elif "planGenerated" in latest:
-                p = (latest["planGenerated"] or {}).get("plan", {})
-                latest_detail = f"Plan: {len(p.get('steps', []))} steps"
-            elif "progressUpdated" in latest:
-                latest_detail = (latest["progressUpdated"] or {}).get("title", "")
-            elif "sessionCompleted" in latest:
-                latest_detail = "Session completed"
-
-        inactive_mins = 0.0
-        if latest_activity_time:
-            try:
-                act_dt = parse_iso_datetime(latest_activity_time)
-                inactive_mins = max(0.0, (now - act_dt).total_seconds() / 60.0)
-            except Exception:
-                pass
-
-        created_str = created_time or updated_time
-        age_days = 0.0
-        if created_str:
-            try:
-                c_dt = parse_iso_datetime(created_str)
-                age_days = max(0.0, (now - c_dt).total_seconds() / 86400.0)
-            except Exception:
-                pass
-
-        is_inactive = bool(max_age_days is not None and max_age_days > 0 and age_days > max_age_days)
-
-        if is_inactive:
-            assessment = "INACTIVE"
-        elif pr_url:
-            assessment = "COMPLETED_WITH_PR"
-        elif state == "AWAITING_PLAN_APPROVAL" or (pending_plan_id and state not in ("FAILED",)):
-            assessment = "AWAITING_PLAN_APPROVAL"
-        elif state == "AWAITING_USER_FEEDBACK" or (agent_awaiting_reply and state not in ("FAILED",)):
-            assessment = "AWAITING_USER_FEEDBACK"
-        elif state == "IN_PROGRESS":
-            if unanswered_user_messages > 0 and inactive_mins >= 15:
-                assessment = "STALLED"
-            elif inactive_mins >= stale_threshold_mins:
-                assessment = "STALLED"
-            else:
-                assessment = "ACTIVE"
-        elif state == "COMPLETED":
-            if unanswered_user_messages > 0:
-                assessment = "STALLED"
-            else:
-                assessment = "COMPLETED_NO_OUTPUT"
-        else:
-            assessment = state
-
-        verdict_lines = _verdict(session_data, activities_list, is_timeline_complete)
-
-        return {
-            "id": sid,
-            "title": title,
-            "state": state,
-            "assessment": assessment,
-            "verdict": verdict_lines,
-            "source": source_name,
-            "branch": branch,
-            "created_time": created_time,
-            "updated_time": updated_time,
-            "latest_activity_time": latest_activity_time,
-            "inactive_mins": round(inactive_mins, 1),
-            "age_days": round(age_days, 1),
-            "is_inactive": is_inactive,
-            "activity_count": len(activities_list),
-            "latest_type": latest_type,
-            "latest_detail": latest_detail,
-            "pending_plan_id": pending_plan_id,
-            "pull_request_url": pr_url,
-            "conversation_history": conversation_history,
-            "user_message_count": user_message_count,
-            "agent_message_count": agent_message_count,
-            "unanswered_user_messages": unanswered_user_messages,
-            "agent_awaiting_reply": agent_awaiting_reply,
-            "last_speaker": last_speaker,
-            "last_user_message": last_user_message,
-            "last_user_time": last_user_time,
-            "last_agent_message": last_agent_message,
-            "last_agent_time": last_agent_time,
-            "code_reviews": code_reviews,
-            "plans": plans,
-        }
+        return _audit_session_data(
+            session_data,
+            activities_list,
+            is_timeline_complete,
+            stale_threshold_mins=stale_threshold_mins,
+            max_age_days=max_age_days,
+        )
