@@ -8,6 +8,10 @@ set -uo pipefail
 export radv_enable_unified_heap_on_apu=true
 # Cap single Vulkan buffer allocations at 3GB to prevent GTT OOM panics on 16GB RAM
 export GGML_VK_FORCE_MAX_ALLOCATION_SIZE=3221225472
+# gfx90c APU: split every Vulkan submission group into single-node submits so no
+# compute job outlives the 2s amdgpu lockup_timeout (llama.cpp #21724). Keeps
+# reason-fast/Ornith deep-KV prefills alive without touching kernel boot params.
+export GGML_VK_MAX_NODES_PER_SUBMIT=1
 # Uncomment below to run completely offline without checking Hugging Face manifests:
 # export LLAMA_OFFLINE=1
 
@@ -44,6 +48,11 @@ restore_settings() {
         echo 0 | sudo tee "$asus_policy" >/dev/null 2>&1 || true
     fi
 
+    # Restore amdgpu ring job timeout to driver default (0 = legacy ~2s detection)
+    if [[ -f /sys/module/amdgpu/parameters/timeout_period ]]; then
+        echo 0 | sudo tee /sys/module/amdgpu/parameters/timeout_period >/dev/null 2>&1 || true
+    fi
+
     # Restore Vega 7 OverDrive clock table and DPM mode
     for dev in /sys/class/drm/card*/device; do
         if [[ -f "$dev/pp_od_clk_voltage" ]]; then
@@ -62,6 +71,7 @@ restore_settings() {
     echo "Vega 7 DPM Mode:  $(cat /sys/class/drm/card*/device/power_dpm_force_performance_level 2>/dev/null || echo 'N/A')"
     echo "Vega 7 SCLK:      $(tr '\n' ' ' < /sys/class/drm/card1/device/pp_dpm_sclk 2>/dev/null || echo 'N/A')"
     echo "Vega 7 OD SCLK:   $(awk '/^[01]:/{printf "%s %s  ", $1, $2}' /sys/class/drm/card1/device/pp_od_clk_voltage 2>/dev/null || echo 'N/A')"
+    echo "GPU Ring Timeout: $(cat /sys/module/amdgpu/parameters/timeout_period 2>/dev/null || echo 'N/A')s"
 }
 
 # Pre-flight check: Refuse to run if llama-server was installed without Vulkan GPU support
@@ -121,6 +131,17 @@ for dev in /sys/class/drm/card*/device; do
     fi
 done
 
+# 5. Raise the amdgpu compute-ring job timeout (timeout_period, in seconds; 0 = legacy ~2s)
+# Vega 7's comp ring kills any Vulkan job running longer than ~2s. Ling-3.0-tiny MoE prefill
+# with a deep cached KV (>25k) runs single flash-attention submits of 3-5s on the 7-CU iGPU,
+# so the kernel resets the ring and RADV surfaces "device lost" -> llama-server exits
+# (llama.cpp #21724, gfx90c APUs; rings reset but the app dies). 30s covers up to 64k KV with
+# margin. lockup_timeout (ms) is read-only at runtime on this kernel; timeout_period is not.
+# Compute-ring resets are scoped to that ring, so the desktop compositor is unaffected.
+if [[ -f /sys/module/amdgpu/parameters/timeout_period ]]; then
+    echo 30 | sudo tee /sys/module/amdgpu/parameters/timeout_period >/dev/null 2>&1 || true
+fi
+
 echo "CPU Boost:        $(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || echo 'N/A')"
 echo "AMD P-State EPP:  $(cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference 2>/dev/null || echo 'N/A')"
 echo "ACPI Profile:     $(cat /sys/firmware/acpi/platform_profile 2>/dev/null || echo 'N/A')"
@@ -128,6 +149,7 @@ echo "Asus Fan Policy:  $(cat "$asus_policy" 2>/dev/null || echo 'N/A')"
 echo "Vega 7 DPM Mode:  $(cat /sys/class/drm/card*/device/power_dpm_force_performance_level 2>/dev/null || echo 'N/A')"
 echo "Vega 7 SCLK:      $(tr '\n' ' ' < /sys/class/drm/card1/device/pp_dpm_sclk 2>/dev/null || echo 'N/A')"
 echo "Vega 7 OD SCLK:   $(awk '/^[01]:/{printf "%s %s  ", $1, $2}' /sys/class/drm/card1/device/pp_od_clk_voltage 2>/dev/null || echo 'N/A')"
+echo "GPU Ring Timeout: $(cat /sys/module/amdgpu/parameters/timeout_period 2>/dev/null || echo 'N/A')s"
 
 # Run llama.cpp
 llama-server --webui --models-preset models.ini --models-max 1 --host 0.0.0.0 --port 8081
