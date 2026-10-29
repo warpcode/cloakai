@@ -23,7 +23,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 try:
     from . import jules_client as jules
-    from . import prompts
     from .handlers import HANDLERS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, TOOLS, handle_jsonrpc
     from .jules_client import AsyncJulesClient, JulesError
     from .prompts import get_prompt, list_prompts
@@ -37,7 +36,6 @@ try:
     )
 except ImportError:
     import jules_client as jules
-    import prompts
     from handlers import HANDLERS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, TOOLS, handle_jsonrpc
     from jules_client import AsyncJulesClient, JulesError
     from prompts import get_prompt, list_prompts
