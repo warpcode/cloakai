@@ -472,6 +472,58 @@ def extract_patch(
     }
 
 
+def _analyze_timeline(timeline: list[dict]) -> tuple[str, bool, int]:
+    """Scan timeline activities to extract pending plan, session completion, and unanswered user message count."""
+    pending_plan = ""
+    completed_marker = False
+    unanswered = 0
+
+    for activity in timeline:
+        if "planGenerated" in activity:
+            pending_plan = (activity["planGenerated"] or {}).get("plan", {}).get("id", "")
+        if "planApproved" in activity:
+            pending_plan = ""
+        if "progressUpdated" in activity:
+            pending_plan = ""
+        if "sessionCompleted" in activity:
+            completed_marker = True
+        if "userMessaged" in activity:
+            unanswered += 1
+        if "agentMessaged" in activity:
+            # Any agent reply clears the backlog, same as the reference client.
+            unanswered = 0
+
+    return pending_plan, completed_marker, unanswered
+
+
+def _format_completed_verdict(
+    pending_plan: str,
+    waiting_on_us: bool,
+    completed_marker: bool,
+    complete: bool,
+) -> list[str]:
+    """Format diagnostic verdict messages for a session with state=COMPLETED."""
+    lines: list[str] = []
+    if pending_plan or waiting_on_us:
+        lines.append(
+            "  state=COMPLETED means the runner went IDLE, not that the work "
+            "finished. It is waiting on you."
+        )
+    elif completed_marker:
+        lines.append("  finished: the session emitted a sessionCompleted marker.")
+    elif complete:
+        lines.append(
+            "  no sessionCompleted marker, but nothing is pending. Treat as "
+            "finished with low confidence; check activities for anything odd."
+        )
+    else:
+        lines.append(
+            "  the timeline was truncated, so a missing sessionCompleted marker "
+            "means nothing here. Re-check with a higher activity limit."
+        )
+    return lines
+
+
 def _verdict(session: dict[str, Any], timeline: list[dict], complete: bool = True) -> list[str]:
     """Decide whether a session is actually finished, and say why.
 
@@ -492,25 +544,7 @@ def _verdict(session: dict[str, Any], timeline: list[dict], complete: bool = Tru
     and `progressUpdated` also clears a pending plan.
     """
     state = session.get("state") or ""
-    pending_plan = ""
-    waiting_on_us = False
-    completed_marker = False
-    unanswered = 0
-
-    for activity in timeline:
-        if "planGenerated" in activity:
-            pending_plan = (activity["planGenerated"] or {}).get("plan", {}).get("id", "")
-        if "planApproved" in activity:
-            pending_plan = ""
-        if "progressUpdated" in activity:
-            pending_plan = ""
-        if "sessionCompleted" in activity:
-            completed_marker = True
-        if "userMessaged" in activity:
-            unanswered += 1
-        if "agentMessaged" in activity:
-            # Any agent reply clears the backlog, same as the reference client.
-            unanswered = 0
+    pending_plan, completed_marker, unanswered = _analyze_timeline(timeline)
     waiting_on_us = unanswered > 0
 
     lines: list[str] = []
@@ -526,23 +560,10 @@ def _verdict(session: dict[str, Any], timeline: list[dict], complete: bool = Tru
         )
 
     if state == "COMPLETED":
-        if pending_plan or waiting_on_us:
-            lines.append(
-                "  state=COMPLETED means the runner went IDLE, not that the work "
-                "finished. It is waiting on you."
-            )
-        elif completed_marker:
-            lines.append("  finished: the session emitted a sessionCompleted marker.")
-        elif complete:
-            lines.append(
-                "  no sessionCompleted marker, but nothing is pending. Treat as "
-                "finished with low confidence; check activities for anything odd."
-            )
-        else:
-            lines.append(
-                "  the timeline was truncated, so a missing sessionCompleted marker "
-                "means nothing here. Re-check with a higher activity limit."
-            )
+        lines.extend(
+            _format_completed_verdict(pending_plan, waiting_on_us, completed_marker, complete)
+        )
+
     return lines
 
 
