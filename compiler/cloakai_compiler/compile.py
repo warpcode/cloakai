@@ -272,7 +272,7 @@ def emit_catalog(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
     if iso.get("read_only"):
         flags.append("--read-only")
     for mount in iso.get("tmpfs", []):
-        flags += ["--tmpfs", str(mount)]
+        flags.extend(["--tmpfs", str(mount)])
     for cap in iso.get("cap_drop", []):
         flags.append(f"--cap-drop={cap}")
     if iso.get("no_new_privileges"):
