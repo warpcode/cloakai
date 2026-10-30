@@ -445,27 +445,21 @@ def cmd_prompt(args: argparse.Namespace) -> int:
 # ==============================================================================
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="jules",
-        description="Google Jules CLI and Model Context Protocol (MCP) server.",
-    )
-    parser.add_argument("--api-key", default=None, help="Explicit Jules API key (default: $JULES_API_KEY)")
-
-    subparsers = parser.add_subparsers(dest="subcommand", title="Available Commands", required=True)
-
-    # sources
+def _add_sources_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Register source and sources subcommands."""
     p_sources = subparsers.add_parser("sources", help="List connected GitHub repositories")
     p_sources.add_argument("--page-size", type=int, default=20)
     p_sources.add_argument("--page-token", default=None)
     p_sources.add_argument("--filter", default=None)
     p_sources.add_argument("--json", action="store_true")
 
-    # source
     p_source = subparsers.add_parser("source", help="Get details for a specific repository source")
     p_source.add_argument("source_id", help="Source ID (e.g. github/owner/repo or sources/github/owner/repo)")
     p_source.add_argument("--json", action="store_true")
 
+
+def _add_session_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Register session-related subcommands."""
     # sessions
     p_sessions = subparsers.add_parser("sessions", help="List Jules task sessions")
     p_sessions.add_argument("--page-size", type=int, default=20)
@@ -545,15 +539,12 @@ def build_parser() -> argparse.ArgumentParser:
         p_patch.add_argument("session_id", help="Target session ID")
         p_patch.add_argument("--output", "-o", default=None, help="Save patch to specified file path")
 
-    # call
-    p_call = subparsers.add_parser("call", help="Direct relative GET call to Jules v1alpha API")
-    p_call.add_argument("endpoint", help="Relative endpoint path (e.g. sources, sessions)")
 
-    # prompts
+def _add_prompt_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Register prompt-related subcommands."""
     p_prompts = subparsers.add_parser("prompts", help="List registered MCP prompt templates")
     p_prompts.add_argument("--json", action="store_true", help="Output JSON schemas")
 
-    # prompt
     p_prompt = subparsers.add_parser("prompt", help="Render an MCP prompt template")
     p_prompt.add_argument("name", help="Name of prompt template (e.g. jules_task_scaffold, jules_agent_bolt)")
     p_prompt.add_argument(
@@ -564,7 +555,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_prompt.add_argument("--json", action="store_true", help="Output raw JSON GetPromptResult")
 
-    # mcp: The MCP serving subcommand
+
+def _add_mcp_and_utility_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Register API call and MCP subcommands."""
+    p_call = subparsers.add_parser("call", help="Direct relative GET call to Jules v1alpha API")
+    p_call.add_argument("endpoint", help="Relative endpoint path (e.g. sources, sessions)")
+
     p_mcp = subparsers.add_parser(
         "mcp",
         help="Serve as a Model Context Protocol (MCP) server (stdio by default, HTTP/SSE with --http)",
@@ -578,6 +574,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=int(os.environ.get("CLOAKAI_MCP_PORT", os.environ.get("PORT", "8081"))),
         help="Port to bind for HTTP mode (default: 8081)",
     )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build and return the main argument parser for the Jules CLI."""
+    parser = argparse.ArgumentParser(
+        prog="jules",
+        description="Google Jules CLI and Model Context Protocol (MCP) server.",
+    )
+    parser.add_argument("--api-key", default=None, help="Explicit Jules API key (default: $JULES_API_KEY)")
+
+    subparsers = parser.add_subparsers(dest="subcommand", title="Available Commands", required=True)
+
+    _add_sources_commands(subparsers)
+    _add_session_commands(subparsers)
+    _add_prompt_commands(subparsers)
+    _add_mcp_and_utility_commands(subparsers)
 
     return parser
 
