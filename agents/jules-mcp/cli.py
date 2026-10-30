@@ -268,7 +268,10 @@ def cmd_audit(client: JulesClient, args: argparse.Namespace) -> int:
         return 1
 
     if not sessions:
-        print("No active sessions found within audit window.")
+        if args.json:
+            print("[]")
+        else:
+            print("No active sessions found within audit window.")
         return 0
 
     audits = client.audit_sessions(
@@ -278,7 +281,10 @@ def cmd_audit(client: JulesClient, args: argparse.Namespace) -> int:
     )
 
     if not audits:
-        print("No active sessions found within audit window.")
+        if args.json:
+            print("[]")
+        else:
+            print("No active sessions found within audit window.")
         return 0
 
     if args.json:
