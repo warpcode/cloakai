@@ -21,7 +21,16 @@ from pathlib import Path
 # here at all, since the mcp package only exists inside the image.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jules_client import JulesError, _clean_sid, _verdict  # noqa: E402
+from jules_client import (  # noqa: E402
+    JulesError,
+    _clean_sid,
+    _verdict,
+    _extract_session_pr_url,
+    _process_activities,
+    _extract_latest_activity_info,
+    _determine_assessment,
+    audit_session,
+)
 
 
 def act(**fields):
@@ -133,6 +142,74 @@ class CleanSessionId(unittest.TestCase):
             _clean_sid("   ")
         with self.assertRaises(JulesError):
             _clean_sid("sessions/")
+
+
+class AuditSessionTests(unittest.TestCase):
+    def test_extract_session_pr_url(self):
+        s1 = {"outputs": [{"pullRequest": {"url": "https://github.com/foo/bar/pull/1"}}]}
+        s2 = {"outputs": [{"other": 123}]}
+        s3 = {}
+        self.assertEqual(_extract_session_pr_url(s1), "https://github.com/foo/bar/pull/1")
+        self.assertEqual(_extract_session_pr_url(s2), "")
+        self.assertEqual(_extract_session_pr_url(s3), "")
+
+    def test_process_activities(self):
+        activities_list = [
+            act(id="a1", createTime="2025-01-01T00:01:00Z", planGenerated={"plan": {"id": "p1", "steps": [{"title": "s1"}]}}),
+            act(id="a2", createTime="2025-01-01T00:02:00Z", planApproved={"planId": "p1"}),
+            act(id="a3", createTime="2025-01-01T00:03:00Z", progressUpdated={"title": "Code reviewed and applied", "description": "review details"}),
+            act(id="a4", createTime="2025-01-01T00:04:00Z", userMessaged={"userMessage": "looks good"}),
+            act(id="a5", createTime="2025-01-01T00:05:00Z", agentMessaged={"agentMessage": "Would you like me to confirm?"}),
+        ]
+        res = _process_activities("Initial prompt", "2025-01-01T00:00:00Z", activities_list)
+        self.assertEqual(res["user_message_count"], 2)  # initial prompt + a4
+        self.assertEqual(res["agent_message_count"], 1)
+        self.assertEqual(res["unanswered_user_messages"], 0)
+        self.assertTrue(res["agent_awaiting_reply"])
+        self.assertEqual(len(res["plans"]), 1)
+        self.assertEqual(len(res["code_reviews"]), 1)
+
+    def test_extract_latest_activity_info(self):
+        self.assertEqual(_extract_latest_activity_info([], "2025-01-01T00:00:00Z"), ("2025-01-01T00:00:00Z", "none", ""))
+        acts = [act(createTime="2025-01-01T00:05:00Z", agentMessaged={"agentMessage": "Hello world"})]
+        t, typ, detail = _extract_latest_activity_info(acts, "2025-01-01T00:00:00Z")
+        self.assertEqual(t, "2025-01-01T00:05:00Z")
+        self.assertEqual(typ, "agentMessaged")
+        self.assertEqual(detail, "Hello world")
+
+    def test_determine_assessment(self):
+        self.assertEqual(_determine_assessment(True, "", "COMPLETED", "", False, 0, 0, 60), "INACTIVE")
+        self.assertEqual(_determine_assessment(False, "https://pr.url", "COMPLETED", "", False, 0, 0, 60), "COMPLETED_WITH_PR")
+        self.assertEqual(_determine_assessment(False, "", "AWAITING_PLAN_APPROVAL", "p1", False, 0, 0, 60), "AWAITING_PLAN_APPROVAL")
+        self.assertEqual(_determine_assessment(False, "", "IN_PROGRESS", "p1", False, 0, 0, 60), "AWAITING_PLAN_APPROVAL")
+        self.assertEqual(_determine_assessment(False, "", "AWAITING_USER_FEEDBACK", "", True, 0, 0, 60), "AWAITING_USER_FEEDBACK")
+        self.assertEqual(_determine_assessment(False, "", "IN_PROGRESS", "", True, 0, 0, 60), "AWAITING_USER_FEEDBACK")
+        self.assertEqual(_determine_assessment(False, "", "IN_PROGRESS", "", False, 1, 16.0, 60), "STALLED")
+        self.assertEqual(_determine_assessment(False, "", "IN_PROGRESS", "", False, 0, 70.0, 60), "STALLED")
+        self.assertEqual(_determine_assessment(False, "", "IN_PROGRESS", "", False, 0, 10.0, 60), "ACTIVE")
+        self.assertEqual(_determine_assessment(False, "", "COMPLETED", "", False, 1, 0, 60), "STALLED")
+        self.assertEqual(_determine_assessment(False, "", "COMPLETED", "", False, 0, 0, 60), "COMPLETED_NO_OUTPUT")
+
+    def test_full_audit_session(self):
+        session_data = {
+            "id": "s100",
+            "title": "Fix bug in system",
+            "state": "COMPLETED",
+            "prompt": "Fix bug in system",
+            "sourceContext": {"source": "sources/github.com/foo/bar", "githubRepoContext": {"startingBranch": "main"}},
+            "createTime": "2025-01-01T00:00:00Z",
+            "updateTime": "2025-01-01T01:00:00Z",
+            "outputs": [{"pullRequest": {"url": "https://github.com/foo/bar/pull/42"}}],
+            "activities": [
+                act(id="a1", createTime="2025-01-01T00:10:00Z", sessionCompleted={}),
+            ],
+        }
+        res = audit_session(session_data, max_age_days=0)
+        self.assertEqual(res["id"], "s100")
+        self.assertEqual(res["assessment"], "COMPLETED_WITH_PR")
+        self.assertEqual(res["pull_request_url"], "https://github.com/foo/bar/pull/42")
+        self.assertEqual(res["source"], "github.com/foo/bar")
+        self.assertEqual(res["branch"], "main")
 
 
 if __name__ == "__main__":
