@@ -28,7 +28,15 @@ NON_THINKING_KEYS = ("embeddings", "reranking")
 
 def build_config(ini: configparser.ConfigParser, api_base: str) -> dict:
     sections = [s for s in ini.sections() if s != "*"]
-    base_params = {"api_base": api_base, "api_key": "llama-local"}
+    default_parallel = int(ini["*"].get("parallel", "1")) if "*" in ini else 1
+
+    base_params = {
+        "api_base": api_base,
+        "api_key": "llama-local",
+        "stream_timeout": 600,
+        "timeout": 600,
+        "keepalive_seconds": 15,
+    }
 
     model_list = []
     for name in sections:
@@ -38,25 +46,43 @@ def build_config(ini: configparser.ConfigParser, api_base: str) -> dict:
         if name == "utility":
             params["reasoning_effort"] = "none"
 
-        entry = {
-            "model_name": name,
-            "litellm_params": params,
+        sec = ini[name]
+        ctx_size = sec.get("ctx-size")
+        parallel = int(sec.get("parallel", default_parallel))
+        if ctx_size:
+            slot_ctx = int(ctx_size) // parallel
+        else:
+            slot_ctx = 32768
+
+        model_info = {
+            "max_input_tokens": slot_ctx,
+            "max_tokens": slot_ctx,
         }
 
         # Advertise native reasoning support on thinking-capable models
-        if name in THINKING_MODELS and not any(k in ini[name] for k in NON_THINKING_KEYS):
-            entry["model_info"] = {
+        if name in THINKING_MODELS and not any(k in sec for k in NON_THINKING_KEYS):
+            model_info.update({
                 "supports_reasoning": True,
                 "reasoning_effort_levels": ["none", "low", "medium", "high"],
                 "default_reasoning_effort": "none" if name == "utility" else "medium",
                 "supported_openai_params": ["reasoning_effort"],
-            }
+            })
+
+        entry = {
+            "model_name": name,
+            "litellm_params": params,
+            "model_info": model_info,
+        }
 
         model_list.append(entry)
 
     return {
         "model_list": model_list,
-        "litellm_settings": {"drop_params": True},
+        "litellm_settings": {
+            "drop_params": True,
+            "sse_keepalive_ping_interval_seconds": 15,
+            "request_timeout": 600,
+        },
     }
 
 
