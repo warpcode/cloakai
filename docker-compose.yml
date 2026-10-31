@@ -1,0 +1,48 @@
+# ==============================================================================
+# cloakai llama-server router + LiteLLM mode proxy, Vulkan iGPU passthrough.
+#
+# Run (render GID varies per host, pass it explicitly):
+#   RENDER_GID=$(stat -c %g /dev/dri/renderD128) docker compose up --build
+#
+# Mode aliases (same resident model, request-time tweaks only):
+#   <group>-low     thinking off
+#   <group>-medium  thinking on, vendor default
+#   <group>-high    thinking on, high effort
+#
+# Accepts the same Vulkan stabiliser envs run.sh exports on the host rig.
+# ==============================================================================
+name: cloakai-llama
+
+services:
+  llama-modes:
+    build:
+      context: .
+      args:
+        LLAMA_TAG: latest # pin to e.g. b11968 when reproducibility matters
+    image: cloakai/llama-server-modes:latest
+    container_name: cloakai-llama
+    init: true
+    # AMD APU iGPU (Vega 7) via RADV - render node only, no privileged mode.
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:?RENDER_GID isn't set - RENDER_GID=\$(stat -c %g /dev/dri/renderD128)}"
+    environment:
+      # Same rz-rig stabilisers as run.sh (host thermal guard stays host-side).
+      radv_enable_unified_heap_on_apu: "true"
+      GGML_VK_FORCE_MAX_ALLOCATION_SIZE: "3221225472"
+      GGML_VK_MAX_NODES_PER_SUBMIT: "1"
+      LLAMA_OFFLINE: "${LLAMA_OFFLINE:-0}"
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-cloak-local}"
+      LITELLM_PORT: "8080"
+      LLAMA_PORT: "8082"
+      MODELS_MAX: "${MODELS_MAX:-1}"
+    volumes:
+      # Live tuned fleet recipe; edit host-side, restart container to apply.
+      - ./models.ini:/app/models.ini:ro
+      # Model blob cache shared with the host llama-server installation.
+      - ${HOME}/.cache/llama.cpp:/data/llama-cache
+    ports:
+      - "8080:8080" # LiteLLM (mode aliases) - the endpoint clients hit
+      # - "8082:8082" # router internals (webui disabled) - uncomment to debug
+    restart: unless-stopped
