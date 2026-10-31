@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cli import build_parser, main
-from jules_client import JulesClient, JulesError
+from jules_client import JulesClient
 
 
 class TestJulesCLI(unittest.TestCase):
@@ -86,6 +86,7 @@ class TestJulesCLI(unittest.TestCase):
             stale_threshold_mins=60,
             max_age_days=30,
         )
+        self.assertFalse(hasattr(mock_client, "audit_session") and mock_client.audit_session.called)
         self.assertIn("s1", stdout.getvalue())
         self.assertIn("ACTIVE", stdout.getvalue())
 
@@ -112,6 +113,19 @@ class TestJulesCLI(unittest.TestCase):
             ret = main(["audit", "--json"])
         self.assertEqual(ret, 0)
         self.assertIn('"id": "s1"', stdout.getvalue())
+
+    @patch("cli._get_client")
+    def test_cmd_audit_empty_sessions(self, mock_get_client):
+        mock_client = MagicMock(spec=JulesClient)
+        mock_client.list_sessions.return_value = []
+        mock_get_client.return_value = mock_client
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["audit"])
+        self.assertEqual(ret, 0)
+        self.assertIn("No active sessions found", stdout.getvalue())
+        mock_client.audit_sessions.assert_not_called()
 
     @patch("cli._get_client")
     def test_cmd_sources_execution(self, mock_get_client):

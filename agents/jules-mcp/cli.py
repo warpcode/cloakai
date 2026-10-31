@@ -26,7 +26,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 # Add agents/jules-mcp to path if run directly
 parent_dir = str(Path(__file__).resolve().parent)
@@ -35,13 +34,11 @@ if parent_dir not in sys.path:
 
 try:
     from . import jules_client as jules
-    from . import prompts
     from .handlers import _describe_activity, _session_summary
     from .jules_client import JulesClient, JulesError
     from .prompts import get_prompt, list_prompts
 except ImportError:
     import jules_client as jules
-    import prompts
     from handlers import _describe_activity, _session_summary
     from jules_client import JulesClient, JulesError
     from prompts import get_prompt, list_prompts
