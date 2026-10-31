@@ -86,7 +86,8 @@ RUN set -eux; \
     vulkaninfo --summary | head -n 40 || true
 
 # LiteLLM proxy: mode aliasing + per-request extra_body injection.
-RUN pip install --no-cache-dir "litellm[proxy]"
+# prisma is required by LiteLLM's auth exception handler; without it, 401s crash as 500s.
+RUN pip install --no-cache-dir "litellm[proxy]" prisma
 
 # Fleet recipe + generator + shepherd (see infra/llama-server/).
 WORKDIR /app
