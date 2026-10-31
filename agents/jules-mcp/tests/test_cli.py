@@ -158,6 +158,69 @@ class TestJulesCLI(unittest.TestCase):
         args = mock_cmd_mcp.call_args[0][0]
         self.assertTrue(args.http)
 
+    @patch("cli._get_client")
+    def test_cmd_audit_calls_bulk_audit_sessions(self, mock_get_client):
+        mock_client = MagicMock(spec=JulesClient)
+        mock_client.list_sessions.return_value = [
+            {"id": "s1", "title": "Session 1"},
+            {"id": "s2", "title": "Session 2"},
+        ]
+        mock_client.audit_sessions.return_value = [
+            {
+                "id": "s1",
+                "state": "IN_PROGRESS",
+                "assessment": "ACTIVE",
+                "inactive_mins": 5.0,
+                "pull_request_url": "https://github.com/org/repo/pull/1",
+                "title": "Session 1",
+            }
+        ]
+        mock_get_client.return_value = mock_client
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["audit", "--days", "14", "--stale-threshold-mins", "30"])
+
+        self.assertEqual(ret, 0)
+        mock_client.audit_sessions.assert_called_once_with(
+            mock_client.list_sessions.return_value,
+            stale_threshold_mins=30,
+            max_age_days=14,
+        )
+        # Ensure individual audit_session was not called (verifying no N+1 query pattern)
+        self.assertFalse(hasattr(mock_client, "audit_session") and mock_client.audit_session.called)
+        output = stdout.getvalue()
+        self.assertIn("Jules Sessions Health Audit", output)
+        self.assertIn("s1", output)
+
+    @patch("cli._get_client")
+    def test_cmd_audit_json_output(self, mock_get_client):
+        mock_client = MagicMock(spec=JulesClient)
+        mock_client.list_sessions.return_value = [{"id": "s1"}]
+        mock_client.audit_sessions.return_value = [{"id": "s1", "assessment": "ACTIVE"}]
+        mock_get_client.return_value = mock_client
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["audit", "--json"])
+
+        self.assertEqual(ret, 0)
+        self.assertIn('"assessment": "ACTIVE"', stdout.getvalue())
+
+    @patch("cli._get_client")
+    def test_cmd_audit_empty_sessions(self, mock_get_client):
+        mock_client = MagicMock(spec=JulesClient)
+        mock_client.list_sessions.return_value = []
+        mock_get_client.return_value = mock_client
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["audit"])
+
+        self.assertEqual(ret, 0)
+        self.assertIn("No active sessions found", stdout.getvalue())
+        mock_client.audit_sessions.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
