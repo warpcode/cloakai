@@ -28,6 +28,11 @@ from jules_client import (  # noqa: E402
     _clean_sid,
     _verdict,
     _extract_session_pr_url,
+    _extract_session_metadata,
+    _handle_user_message_activity,
+    _handle_agent_message_activity,
+    _should_fetch_timeline,
+    _resolve_session_activities,
     _process_activities,
     _extract_latest_activity_info,
     _determine_assessment,
@@ -282,6 +287,74 @@ class AuditSessionTests(unittest.TestCase):
         self.assertEqual(res["pull_request_url"], "https://github.com/foo/bar/pull/42")
         self.assertEqual(res["source"], "github.com/foo/bar")
         self.assertEqual(res["branch"], "main")
+
+    def test_extract_session_metadata(self):
+        s = {
+            "name": "sessions/sess-123",
+            "title": "  My   Special   Title  ",
+            "state": "IN_PROGRESS",
+            "sourceContext": {
+                "source": "sources/github.com/org/repo",
+                "githubRepoContext": {"startingBranch": "feature"},
+            },
+            "createTime": "2025-01-01T00:00:00Z",
+            "updateTime": "2025-01-01T01:00:00Z",
+            "prompt": "  Do task  ",
+        }
+        meta = _extract_session_metadata(s)
+        self.assertEqual(meta["id"], "sess-123")
+        self.assertEqual(meta["title"], "My Special Title")
+        self.assertEqual(meta["state"], "IN_PROGRESS")
+        self.assertEqual(meta["source"], "github.com/org/repo")
+        self.assertEqual(meta["branch"], "feature")
+        self.assertEqual(meta["created_time"], "2025-01-01T00:00:00Z")
+        self.assertEqual(meta["updated_time"], "2025-01-01T01:00:00Z")
+        self.assertEqual(meta["prompt"], "Do task")
+
+    def test_handle_user_and_agent_message_activity(self):
+        convo: list[dict] = []
+        user_act = act(userMessaged={"userMessage": "  hello  "})
+        msg, ts = _handle_user_message_activity(user_act, "2025-01-01T00:01:00Z", "u1", convo)
+        self.assertEqual(msg, "hello")
+        self.assertEqual(ts, "2025-01-01T00:01:00Z")
+        self.assertEqual(len(convo), 1)
+        self.assertEqual(convo[0]["role"], "user")
+        self.assertEqual(convo[0]["content"], "hello")
+
+        agent_act = act(agentMessaged={"agentMessage": "  world  "})
+        msg_a, ts_a = _handle_agent_message_activity(agent_act, "2025-01-01T00:02:00Z", "a1", convo)
+        self.assertEqual(msg_a, "world")
+        self.assertEqual(ts_a, "2025-01-01T00:02:00Z")
+        self.assertEqual(len(convo), 2)
+        self.assertEqual(convo[1]["role"], "agent")
+        self.assertEqual(convo[1]["content"], "world")
+
+    def test_should_fetch_timeline(self):
+        self.assertFalse(_should_fetch_timeline("COMPLETED", "https://pr.url"))
+        self.assertTrue(_should_fetch_timeline("COMPLETED", ""))
+        self.assertTrue(_should_fetch_timeline("IN_PROGRESS", "https://pr.url"))
+        self.assertTrue(_should_fetch_timeline("IN_PROGRESS", ""))
+
+    def test_resolve_session_activities(self):
+        # 1. Activities already in session_data
+        acts = [act(id="1")]
+        res_acts, complete = _resolve_session_activities("s1", {"activities": acts}, "")
+        self.assertEqual(res_acts, acts)
+        self.assertTrue(complete)
+
+        # 2. Completed with PR -> empty activities without calling timeline
+        res_acts_pr, complete_pr = _resolve_session_activities(
+            "s2", {"state": "COMPLETED"}, "https://pr.url"
+        )
+        self.assertEqual(res_acts_pr, [])
+        self.assertTrue(complete_pr)
+
+    def test_audit_session_with_string_id(self):
+        # Passing string ID should gracefully initialize session_data with id
+        session_id = "s-string-123"
+        res = audit_session(session_id, max_age_days=0)
+        self.assertEqual(res["id"], "s-string-123")
+        self.assertEqual(res["state"], "UNKNOWN")
 
 
 if __name__ == "__main__":

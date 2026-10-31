@@ -658,6 +658,42 @@ def _handle_progress_activity(
         })
 
 
+def _handle_user_message_activity(
+    activity: dict[str, Any],
+    timestamp: str,
+    activity_id: str,
+    conversation_history: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Process userMessaged activity, returning (user_message, timestamp)."""
+    user_msg = (activity.get("userMessaged") or {}).get("userMessage", "").strip()
+    conversation_history.append({
+        "role": "user",
+        "type": "message",
+        "time": timestamp,
+        "id": activity_id,
+        "content": user_msg,
+    })
+    return user_msg, timestamp
+
+
+def _handle_agent_message_activity(
+    activity: dict[str, Any],
+    timestamp: str,
+    activity_id: str,
+    conversation_history: list[dict[str, Any]],
+) -> tuple[str, str]:
+    """Process agentMessaged activity, returning (agent_message, timestamp)."""
+    agent_msg = (activity.get("agentMessaged") or {}).get("agentMessage", "").strip()
+    conversation_history.append({
+        "role": "agent",
+        "type": "message",
+        "time": timestamp,
+        "id": activity_id,
+        "content": agent_msg,
+    })
+    return agent_msg, timestamp
+
+
 def _process_activities(
     prompt: str,
     created_time: str,
@@ -701,32 +737,18 @@ def _process_activities(
             _handle_progress_activity(a, t, aid, code_reviews, conversation_history)
 
         if "userMessaged" in a:
-            user_msg = (a["userMessaged"] or {}).get("userMessage", "").strip()
+            user_msg, u_time = _handle_user_message_activity(a, t, aid, conversation_history)
             user_message_count += 1
             unanswered_user_messages += 1
             last_user_message = user_msg
-            last_user_time = t
-            conversation_history.append({
-                "role": "user",
-                "type": "message",
-                "time": t,
-                "id": aid,
-                "content": user_msg,
-            })
+            last_user_time = u_time
 
         if "agentMessaged" in a:
-            agent_msg = (a["agentMessaged"] or {}).get("agentMessage", "").strip()
+            agent_msg, a_time = _handle_agent_message_activity(a, t, aid, conversation_history)
             agent_message_count += 1
             unanswered_user_messages = 0
             last_agent_message = agent_msg
-            last_agent_time = t
-            conversation_history.append({
-                "role": "agent",
-                "type": "message",
-                "time": t,
-                "id": aid,
-                "content": agent_msg,
-            })
+            last_agent_time = a_time
 
         if "sessionCompleted" in a:
             conversation_history.append({
@@ -848,6 +870,56 @@ def _calculate_session_timing(
     return inactive_mins, age_days, is_inactive
 
 
+def _extract_session_metadata(session_data: dict[str, Any]) -> dict[str, str]:
+    """Extract baseline identification and contextual attributes from a session object."""
+    sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+    raw_title = session_data.get("title") or session_data.get("prompt", "")
+    title = " ".join(raw_title.split())[:60]
+    state = session_data.get("state", "UNKNOWN")
+    source_ctx = session_data.get("sourceContext") or {}
+    source_name = source_ctx.get("source", "").removeprefix("sources/")
+    branch = (source_ctx.get("githubRepoContext") or {}).get("startingBranch", "")
+    created_time = session_data.get("createTime", "")
+    updated_time = session_data.get("updateTime", "")
+    prompt = session_data.get("prompt", "").strip()
+    return {
+        "id": sid,
+        "title": title,
+        "state": state,
+        "source": source_name,
+        "branch": branch,
+        "created_time": created_time,
+        "updated_time": updated_time,
+        "prompt": prompt,
+    }
+
+
+def _should_fetch_timeline(state: str, pr_url: str) -> bool:
+    """Determine whether full activity timeline fetching is necessary."""
+    return not (state == "COMPLETED" and bool(pr_url))
+
+
+def _resolve_session_activities(
+    sid: str,
+    session_data: dict[str, Any],
+    pr_url: str,
+    key: str | None = None,
+    base_url: str = BASE,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Resolve activity list and timeline completeness for synchronous audit."""
+    if "activities" in session_data and isinstance(session_data["activities"], list):
+        return session_data["activities"], True
+
+    state = session_data.get("state", "UNKNOWN")
+    if not sid or not _should_fetch_timeline(state, pr_url):
+        return [], True
+
+    try:
+        return timeline(sid, key=key, base_url=base_url)
+    except Exception:
+        return [], False
+
+
 def _audit_session_data(
     session_data: dict[str, Any],
     activities_list: list[dict[str, Any]],
@@ -856,32 +928,21 @@ def _audit_session_data(
     max_age_days: int = 30,
 ) -> dict[str, Any]:
     """Pure analysis of session_data and activities_list to return diagnostic metrics."""
-    sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
-    raw_title = session_data.get("title") or session_data.get("prompt", "")
-    title = " ".join(raw_title.split())[:60]
-    state = session_data.get("state", "UNKNOWN")
-    source_ctx = session_data.get("sourceContext") or {}
-    source_name = source_ctx.get("source", "").removeprefix("sources/")
-    branch = (source_ctx.get("githubRepoContext") or {}).get("startingBranch", "")
-
-    created_time = session_data.get("createTime", "")
-    updated_time = session_data.get("updateTime", "")
-
+    meta = _extract_session_metadata(session_data)
     pr_url = _extract_session_pr_url(session_data)
-    prompt = session_data.get("prompt", "").strip()
 
-    proc = _process_activities(prompt, created_time, activities_list)
+    proc = _process_activities(meta["prompt"], meta["created_time"], activities_list)
 
-    latest_activity_time, latest_type, latest_detail = _extract_latest_activity_info(activities_list, updated_time)
+    latest_activity_time, latest_type, latest_detail = _extract_latest_activity_info(activities_list, meta["updated_time"])
 
     inactive_mins, age_days, is_inactive = _calculate_session_timing(
-        created_time, updated_time, latest_activity_time, max_age_days=max_age_days
+        meta["created_time"], meta["updated_time"], latest_activity_time, max_age_days=max_age_days
     )
 
     assessment = _determine_assessment(
         is_inactive=is_inactive,
         pr_url=pr_url,
-        state=state,
+        state=meta["state"],
         pending_plan_id=proc["pending_plan_id"],
         agent_awaiting_reply=proc["agent_awaiting_reply"],
         unanswered_user_messages=proc["unanswered_user_messages"],
@@ -892,15 +953,15 @@ def _audit_session_data(
     verdict_lines = _verdict(session_data, activities_list, is_timeline_complete)
 
     return {
-        "id": sid,
-        "title": title,
-        "state": state,
+        "id": meta["id"],
+        "title": meta["title"],
+        "state": meta["state"],
         "assessment": assessment,
         "verdict": verdict_lines,
-        "source": source_name,
-        "branch": branch,
-        "created_time": created_time,
-        "updated_time": updated_time,
+        "source": meta["source"],
+        "branch": meta["branch"],
+        "created_time": meta["created_time"],
+        "updated_time": meta["updated_time"],
         "latest_activity_time": latest_activity_time,
         "inactive_mins": round(inactive_mins, 1),
         "age_days": round(age_days, 1),
@@ -926,14 +987,20 @@ def _audit_session_data(
 
 
 def audit_session(
-    session_data: dict[str, Any],
+    session: str | dict[str, Any],
     stale_threshold_mins: int = 60,
     max_age_days: int = 30,
     key: str | None = None,
     base_url: str = BASE,
 ) -> dict[str, Any]:
     """Evaluate session state, activities, and return diagnostic metrics including assessment and verdict."""
-    sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+    if isinstance(session, str):
+        sid = session.strip().removeprefix("sessions/").strip()
+        session_data: dict[str, Any] = {"id": sid}
+    else:
+        session_data = session
+        sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+
     if "state" not in session_data and sid:
         try:
             session_data = get_session(sid, key=key, base_url=base_url)
@@ -941,22 +1008,9 @@ def audit_session(
             pass
 
     pr_url = _extract_session_pr_url(session_data)
-    state = session_data.get("state", "UNKNOWN")
-
-    activities_list: list[dict[str, Any]] = []
-    is_timeline_complete = True
-    if "activities" in session_data and isinstance(session_data["activities"], list):
-        activities_list = session_data["activities"]
-    elif sid:
-        if state == "COMPLETED" and pr_url:
-            activities_list = []
-            is_timeline_complete = True
-        else:
-            try:
-                activities_list, is_timeline_complete = timeline(sid, key=key, base_url=base_url)
-            except Exception:
-                activities_list = []
-                is_timeline_complete = False
+    activities_list, is_timeline_complete = _resolve_session_activities(
+        sid, session_data, pr_url, key=key, base_url=base_url
+    )
 
     return _audit_session_data(
         session_data,
@@ -1460,13 +1514,38 @@ class AsyncJulesClient:
             "session_id": sid,
         }
 
+    async def _resolve_session_activities(
+        self,
+        sid: str,
+        session_data: dict[str, Any],
+        pr_url: str,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Resolve activity list and timeline completeness asynchronously."""
+        if "activities" in session_data and isinstance(session_data["activities"], list):
+            return session_data["activities"], True
+
+        state = session_data.get("state", "UNKNOWN")
+        if not sid or not _should_fetch_timeline(state, pr_url):
+            return [], True
+
+        try:
+            return await self.timeline(sid)
+        except Exception:
+            return [], False
+
     async def audit_session(
         self,
-        session_data: dict[str, Any],
+        session: str | dict[str, Any],
         stale_threshold_mins: int = 60,
         max_age_days: int = 30,
     ) -> dict[str, Any]:
-        sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+        if isinstance(session, str):
+            sid = session.strip().removeprefix("sessions/").strip()
+            session_data: dict[str, Any] = {"id": sid}
+        else:
+            session_data = session
+            sid = session_data.get("id") or session_data.get("name", "").removeprefix("sessions/")
+
         if "state" not in session_data and sid:
             try:
                 session_data = await self.get_session(sid)
@@ -1474,22 +1553,9 @@ class AsyncJulesClient:
                 pass
 
         pr_url = _extract_session_pr_url(session_data)
-        state = session_data.get("state", "UNKNOWN")
-
-        activities_list: list[dict[str, Any]] = []
-        is_timeline_complete = True
-        if "activities" in session_data and isinstance(session_data["activities"], list):
-            activities_list = session_data["activities"]
-        elif sid:
-            if state == "COMPLETED" and pr_url:
-                activities_list = []
-                is_timeline_complete = True
-            else:
-                try:
-                    activities_list, is_timeline_complete = await self.timeline(sid)
-                except Exception:
-                    activities_list = []
-                    is_timeline_complete = False
+        activities_list, is_timeline_complete = await self._resolve_session_activities(
+            sid, session_data, pr_url
+        )
 
         return _audit_session_data(
             session_data,
