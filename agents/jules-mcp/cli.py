@@ -268,22 +268,24 @@ def cmd_audit(client: JulesClient, args: argparse.Namespace) -> int:
         return 1
 
     if not sessions:
-        print("No active sessions found within audit window.")
+        if args.json:
+            print("[]")
+        else:
+            print("No active sessions found within audit window.")
         return 0
 
-    audits = []
-    for s in sessions:
-        if s.get("archived") is True:
-            continue
-        try:
-            a = client.audit_session(
-                s,
-                stale_threshold_mins=args.stale_threshold_mins,
-                max_age_days=args.max_age_days,
-            )
-            audits.append(a)
-        except Exception:
-            pass
+    audits = client.audit_sessions(
+        sessions,
+        stale_threshold_mins=args.stale_threshold_mins,
+        max_age_days=args.max_age_days,
+    )
+
+    if not audits:
+        if args.json:
+            print("[]")
+        else:
+            print("No active sessions found within audit window.")
+        return 0
 
     if args.json:
         print(json.dumps(audits, indent=2))
