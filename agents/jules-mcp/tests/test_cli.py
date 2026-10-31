@@ -60,6 +60,60 @@ class TestJulesCLI(unittest.TestCase):
         self.assertEqual(args2.port, 9000)
 
     @patch("cli._get_client")
+    def test_cmd_audit_execution(self, mock_get_client):
+        mock_client = MagicMock(spec=JulesClient)
+        mock_client.list_sessions.return_value = [
+            {"id": "s1", "state": "IN_PROGRESS", "title": "Test 1"},
+        ]
+        mock_client.audit_sessions.return_value = [
+            {
+                "id": "s1",
+                "state": "IN_PROGRESS",
+                "assessment": "ACTIVE",
+                "inactive_mins": 5.0,
+                "pull_request_url": "",
+                "title": "Test 1",
+            }
+        ]
+        mock_get_client.return_value = mock_client
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["audit"])
+        self.assertEqual(ret, 0)
+        mock_client.audit_sessions.assert_called_once_with(
+            mock_client.list_sessions.return_value,
+            stale_threshold_mins=60,
+            max_age_days=30,
+        )
+        self.assertIn("s1", stdout.getvalue())
+        self.assertIn("ACTIVE", stdout.getvalue())
+
+    @patch("cli._get_client")
+    def test_cmd_audit_json(self, mock_get_client):
+        mock_client = MagicMock(spec=JulesClient)
+        mock_client.list_sessions.return_value = [
+            {"id": "s1", "state": "IN_PROGRESS", "title": "Test 1"},
+        ]
+        mock_client.audit_sessions.return_value = [
+            {
+                "id": "s1",
+                "state": "IN_PROGRESS",
+                "assessment": "ACTIVE",
+                "inactive_mins": 5.0,
+                "pull_request_url": "",
+                "title": "Test 1",
+            }
+        ]
+        mock_get_client.return_value = mock_client
+
+        stdout = io.StringIO()
+        with patch("sys.stdout", stdout):
+            ret = main(["audit", "--json"])
+        self.assertEqual(ret, 0)
+        self.assertIn('"id": "s1"', stdout.getvalue())
+
+    @patch("cli._get_client")
     def test_cmd_sources_execution(self, mock_get_client):
         mock_client = MagicMock(spec=JulesClient)
         mock_client.list_sources.return_value = [
