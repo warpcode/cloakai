@@ -115,6 +115,62 @@ class TestHandlers(unittest.TestCase):
         self.assertTrue(res.result["isError"])
         self.assertIn("Refusing to delete", res.result["content"][0]["text"])
 
+    def test_call_tool_jules_audit(self):
+        self.mock_client.list_sessions.return_value = [
+            {"id": "s1", "state": "IN_PROGRESS", "title": "Audit session 1"},
+            {"id": "s2", "state": "COMPLETED", "title": "Audit session 2"},
+        ]
+        self.mock_client.audit_sessions.return_value = [
+            {
+                "id": "s1",
+                "state": "IN_PROGRESS",
+                "assessment": "ACTIVE",
+                "inactive_mins": 5.0,
+                "pull_request_url": "",
+                "title": "Audit session 1",
+            },
+            {
+                "id": "s2",
+                "state": "COMPLETED",
+                "assessment": "PR_OPEN",
+                "inactive_mins": 10.0,
+                "pull_request_url": "https://github.com/foo/bar/pull/1",
+                "title": "Audit session 2",
+            },
+        ]
+        req = JSONRPCRequest(
+            id=13,
+            method="tools/call",
+            params={
+                "name": "jules_audit",
+                "arguments": {"stale_threshold_mins": 30, "max_age_days": 7},
+            },
+        )
+        res = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertEqual(res.id, 13)
+        self.assertFalse(res.result["isError"])
+        self.mock_client.audit_sessions.assert_awaited_once_with(
+            self.mock_client.list_sessions.return_value,
+            stale_threshold_mins=30,
+            max_age_days=7,
+        )
+        content_text = res.result["content"][0]["text"]
+        self.assertIn("## Jules Sessions Health Audit", content_text)
+        self.assertIn("| `s1` | IN_PROGRESS | **ACTIVE** | 5.0 | - | Audit session 1 |", content_text)
+        self.assertIn("| `s2` | COMPLETED | **PR_OPEN** | 10.0 | https://github.com/foo/bar/pull/1 | Audit session 2 |", content_text)
+
+    def test_call_tool_jules_audit_empty(self):
+        self.mock_client.list_sessions.return_value = []
+        req = JSONRPCRequest(
+            id=14,
+            method="tools/call",
+            params={"name": "jules_audit", "arguments": {}},
+        )
+        res = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertEqual(res.id, 14)
+        self.assertFalse(res.result["isError"])
+        self.assertIn("No active sessions found", res.result["content"][0]["text"])
+
     def test_call_tool_jules_get_patch(self):
         self.mock_client.extract_patch.return_value = {
             "patch": "--- a/foo\n+++ b/foo\n@@ -1 +1 @@\n-bar\n+baz\n",
