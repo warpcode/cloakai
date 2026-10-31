@@ -496,6 +496,21 @@ def _analyze_timeline(timeline: list[dict]) -> tuple[str, bool, int]:
     return pending_plan, completed_marker, unanswered
 
 
+def _format_waiting_verdict(pending_plan: str, unanswered: int) -> list[str]:
+    """Format diagnostic messages when a session is waiting for user action."""
+    lines: list[str] = []
+    if pending_plan:
+        lines.append(
+            f"  WAITING: plan '{pending_plan}' is generated but not approved. "
+            f"Read it with jules_status, then jules_approve_plan."
+        )
+    if unanswered > 0:
+        lines.append(
+            f"  WAITING: {unanswered} message(s) from you have not been answered."
+        )
+    return lines
+
+
 def _format_completed_verdict(
     pending_plan: str,
     waiting_on_us: bool,
@@ -548,16 +563,7 @@ def _verdict(session: dict[str, Any], timeline: list[dict], complete: bool = Tru
     waiting_on_us = unanswered > 0
 
     lines: list[str] = []
-
-    if pending_plan:
-        lines.append(
-            f"  WAITING: plan '{pending_plan}' is generated but not approved. "
-            f"Read it with jules_status, then jules_approve_plan."
-        )
-    if waiting_on_us:
-        lines.append(
-            f"  WAITING: {unanswered} message(s) from you have not been answered."
-        )
+    lines.extend(_format_waiting_verdict(pending_plan, unanswered))
 
     if state == "COMPLETED":
         lines.extend(
