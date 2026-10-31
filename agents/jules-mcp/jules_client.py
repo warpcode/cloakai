@@ -575,6 +575,83 @@ def _extract_session_pr_url(session_data: dict[str, Any]) -> str:
     return ""
 
 
+def _is_agent_awaiting_reply(last_speaker: str, last_agent_message: str) -> bool:
+    """Determine whether the agent is waiting for a user reply based on the trailing message."""
+    if last_speaker != "agent" or not last_agent_message:
+        return False
+    lower_msg = last_agent_message.lower()
+    feedback_triggers = (
+        "confirm",
+        "approve",
+        "proceed",
+        "look good",
+        "?",
+        "let me know",
+        "feedback",
+    )
+    return any(q in lower_msg for q in feedback_triggers)
+
+
+def _handle_plan_activity(
+    activity: dict[str, Any],
+    timestamp: str,
+    activity_id: str,
+    plans: list[dict[str, Any]],
+    conversation_history: list[dict[str, Any]],
+) -> str:
+    """Process planGenerated and planApproved activities, returning updated pending_plan_id."""
+    if "planGenerated" in activity:
+        p = (activity["planGenerated"] or {}).get("plan", {})
+        pid = p.get("id", "")
+        steps = [s.get("title", "") for s in p.get("steps", [])]
+        plans.append({"id": pid, "time": timestamp, "steps": steps})
+        conversation_history.append({
+            "role": "agent",
+            "type": "plan_generated",
+            "time": timestamp,
+            "id": activity_id,
+            "content": f"Generated plan '{pid}' with {len(steps)} steps.",
+            "plan": p,
+        })
+        return pid
+
+    if "planApproved" in activity:
+        pid = (activity["planApproved"] or {}).get("planId", "")
+        conversation_history.append({
+            "role": "user",
+            "type": "plan_approved",
+            "time": timestamp,
+            "id": activity_id,
+            "content": f"Plan '{pid}' approved.",
+        })
+        return ""
+
+    return ""
+
+
+def _handle_progress_activity(
+    activity: dict[str, Any],
+    timestamp: str,
+    activity_id: str,
+    code_reviews: list[dict[str, Any]],
+    conversation_history: list[dict[str, Any]],
+) -> None:
+    """Process progressUpdated activity, identifying and recording code reviews."""
+    pu = activity.get("progressUpdated") or {}
+    pu_title = pu.get("title", "")
+    pu_desc = pu.get("description", "")
+    if "reviewed" in pu_title.lower() or "review" in pu_desc.lower():
+        code_reviews.append({"time": timestamp, "title": pu_title, "description": pu_desc})
+        conversation_history.append({
+            "role": "agent",
+            "type": "code_review",
+            "time": timestamp,
+            "id": activity_id,
+            "content": f"Code review: {pu_title}",
+            "review": pu,
+        })
+
+
 def _process_activities(
     prompt: str,
     created_time: str,
@@ -610,47 +687,12 @@ def _process_activities(
         t = a.get("createTime", "")
         aid = a.get("id", "")
 
-        if "planGenerated" in a:
-            p = (a["planGenerated"] or {}).get("plan", {})
-            pid = p.get("id", "")
-            steps = [s.get("title", "") for s in p.get("steps", [])]
-            plans.append({"id": pid, "time": t, "steps": steps})
-            pending_plan_id = pid
-            conversation_history.append({
-                "role": "agent",
-                "type": "plan_generated",
-                "time": t,
-                "id": aid,
-                "content": f"Generated plan '{pid}' with {len(steps)} steps.",
-                "plan": p,
-            })
-
-        if "planApproved" in a:
-            pid = (a["planApproved"] or {}).get("planId", "")
-            pending_plan_id = ""
-            conversation_history.append({
-                "role": "user",
-                "type": "plan_approved",
-                "time": t,
-                "id": aid,
-                "content": f"Plan '{pid}' approved.",
-            })
+        if "planGenerated" in a or "planApproved" in a:
+            pending_plan_id = _handle_plan_activity(a, t, aid, plans, conversation_history)
 
         if "progressUpdated" in a:
             pending_plan_id = ""
-            pu = a["progressUpdated"] or {}
-            pu_title = pu.get("title", "")
-            pu_desc = pu.get("description", "")
-            if "reviewed" in pu_title.lower() or "review" in pu_desc.lower():
-                code_reviews.append({"time": t, "title": pu_title, "description": pu_desc})
-                conversation_history.append({
-                    "role": "agent",
-                    "type": "code_review",
-                    "time": t,
-                    "id": aid,
-                    "content": f"Code review: {pu_title}",
-                    "review": pu,
-                })
+            _handle_progress_activity(a, t, aid, code_reviews, conversation_history)
 
         if "userMessaged" in a:
             user_msg = (a["userMessaged"] or {}).get("userMessage", "").strip()
@@ -690,11 +732,7 @@ def _process_activities(
             })
 
     last_speaker = conversation_history[-1]["role"] if conversation_history else "none"
-    agent_awaiting_reply = False
-    if last_speaker == "agent" and last_agent_message:
-        lower_msg = last_agent_message.lower()
-        if any(q in lower_msg for q in ["confirm", "approve", "proceed", "look good", "?", "let me know", "feedback"]):
-            agent_awaiting_reply = True
+    agent_awaiting_reply = _is_agent_awaiting_reply(last_speaker, last_agent_message)
 
     return {
         "conversation_history": conversation_history,
@@ -774,6 +812,36 @@ def _determine_assessment(
     return state
 
 
+def _calculate_session_timing(
+    created_time: str,
+    updated_time: str,
+    latest_activity_time: str,
+    max_age_days: int | None = 30,
+    now: datetime | None = None,
+) -> tuple[float, float, bool]:
+    """Calculate inactive minutes, age in days, and inactive status flag."""
+    current_time = now or datetime.now(timezone.utc)
+    inactive_mins = 0.0
+    if latest_activity_time:
+        try:
+            act_dt = parse_iso_datetime(latest_activity_time)
+            inactive_mins = max(0.0, (current_time - act_dt).total_seconds() / 60.0)
+        except Exception:
+            pass
+
+    created_str = created_time or updated_time
+    age_days = 0.0
+    if created_str:
+        try:
+            c_dt = parse_iso_datetime(created_str)
+            age_days = max(0.0, (current_time - c_dt).total_seconds() / 86400.0)
+        except Exception:
+            pass
+
+    is_inactive = bool(max_age_days is not None and max_age_days > 0 and age_days > max_age_days)
+    return inactive_mins, age_days, is_inactive
+
+
 def _audit_session_data(
     session_data: dict[str, Any],
     activities_list: list[dict[str, Any]],
@@ -800,25 +868,9 @@ def _audit_session_data(
 
     latest_activity_time, latest_type, latest_detail = _extract_latest_activity_info(activities_list, updated_time)
 
-    now = datetime.now(timezone.utc)
-    inactive_mins = 0.0
-    if latest_activity_time:
-        try:
-            act_dt = parse_iso_datetime(latest_activity_time)
-            inactive_mins = max(0.0, (now - act_dt).total_seconds() / 60.0)
-        except Exception:
-            pass
-
-    created_str = created_time or updated_time
-    age_days = 0.0
-    if created_str:
-        try:
-            c_dt = parse_iso_datetime(created_str)
-            age_days = max(0.0, (now - c_dt).total_seconds() / 86400.0)
-        except Exception:
-            pass
-
-    is_inactive = bool(max_age_days is not None and max_age_days > 0 and age_days > max_age_days)
+    inactive_mins, age_days, is_inactive = _calculate_session_timing(
+        created_time, updated_time, latest_activity_time, max_age_days=max_age_days
+    )
 
     assessment = _determine_assessment(
         is_inactive=is_inactive,

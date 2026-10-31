@@ -21,6 +21,8 @@ from pathlib import Path
 # here at all, since the mcp package only exists inside the image.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from datetime import datetime, timezone
+
 from jules_client import (  # noqa: E402
     JulesError,
     _clean_sid,
@@ -29,6 +31,10 @@ from jules_client import (  # noqa: E402
     _process_activities,
     _extract_latest_activity_info,
     _determine_assessment,
+    _is_agent_awaiting_reply,
+    _handle_plan_activity,
+    _handle_progress_activity,
+    _calculate_session_timing,
     audit_session,
 )
 
@@ -189,6 +195,72 @@ class AuditSessionTests(unittest.TestCase):
         self.assertEqual(_determine_assessment(False, "", "IN_PROGRESS", "", False, 0, 10.0, 60), "ACTIVE")
         self.assertEqual(_determine_assessment(False, "", "COMPLETED", "", False, 1, 0, 60), "STALLED")
         self.assertEqual(_determine_assessment(False, "", "COMPLETED", "", False, 0, 0, 60), "COMPLETED_NO_OUTPUT")
+
+    def test_is_agent_awaiting_reply(self):
+        self.assertFalse(_is_agent_awaiting_reply("user", "Can you confirm?"))
+        self.assertFalse(_is_agent_awaiting_reply("agent", ""))
+        self.assertTrue(_is_agent_awaiting_reply("agent", "Does this look good to you?"))
+        self.assertTrue(_is_agent_awaiting_reply("agent", "Please confirm if I should proceed."))
+        self.assertTrue(_is_agent_awaiting_reply("agent", "Let me know what you think."))
+        self.assertFalse(_is_agent_awaiting_reply("agent", "I have finished all tasks."))
+
+    def test_handle_plan_activity(self):
+        plans: list[dict] = []
+        convo: list[dict] = []
+        gen_act = act(planGenerated={"plan": {"id": "p123", "steps": [{"title": "Step 1"}]}})
+        pid = _handle_plan_activity(gen_act, "2025-01-01T00:01:00Z", "a1", plans, convo)
+        self.assertEqual(pid, "p123")
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(plans[0]["id"], "p123")
+        self.assertEqual(len(convo), 1)
+        self.assertEqual(convo[0]["type"], "plan_generated")
+
+        app_act = act(planApproved={"planId": "p123"})
+        pid2 = _handle_plan_activity(app_act, "2025-01-01T00:02:00Z", "a2", plans, convo)
+        self.assertEqual(pid2, "")
+        self.assertEqual(len(convo), 2)
+        self.assertEqual(convo[1]["type"], "plan_approved")
+
+        other_act = act(otherField={})
+        pid3 = _handle_plan_activity(other_act, "2025-01-01T00:03:00Z", "a3", plans, convo)
+        self.assertEqual(pid3, "")
+
+    def test_handle_progress_activity(self):
+        code_reviews: list[dict] = []
+        convo: list[dict] = []
+        act1 = act(progressUpdated={"title": "Code review comments applied", "description": "reviewed files"})
+        _handle_progress_activity(act1, "2025-01-01T00:01:00Z", "a1", code_reviews, convo)
+        self.assertEqual(len(code_reviews), 1)
+        self.assertEqual(code_reviews[0]["title"], "Code review comments applied")
+        self.assertEqual(len(convo), 1)
+        self.assertEqual(convo[0]["type"], "code_review")
+
+        # Non-review progress update should not append to code_reviews
+        act2 = act(progressUpdated={"title": "Running unit tests", "description": "tests running"})
+        _handle_progress_activity(act2, "2025-01-01T00:02:00Z", "a2", code_reviews, convo)
+        self.assertEqual(len(code_reviews), 1)
+        self.assertEqual(len(convo), 1)
+
+    def test_calculate_session_timing(self):
+        now = datetime(2025, 1, 10, 12, 0, 0, tzinfo=timezone.utc)
+        created = "2025-01-01T12:00:00Z"
+        updated = "2025-01-05T12:00:00Z"
+        latest_act = "2025-01-10T11:30:00Z"
+
+        inactive_mins, age_days, is_inactive = _calculate_session_timing(
+            created, updated, latest_act, max_age_days=5, now=now
+        )
+        self.assertAlmostEqual(inactive_mins, 30.0, places=1)
+        self.assertAlmostEqual(age_days, 9.0, places=1)
+        self.assertTrue(is_inactive)
+
+        # Edge case: empty timestamps
+        inactive_mins, age_days, is_inactive = _calculate_session_timing(
+            "", "", "", max_age_days=30, now=now
+        )
+        self.assertEqual(inactive_mins, 0.0)
+        self.assertEqual(age_days, 0.0)
+        self.assertFalse(is_inactive)
 
     def test_full_audit_session(self):
         session_data = {
