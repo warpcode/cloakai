@@ -21,6 +21,7 @@ from pathlib import Path
 # here at all, since the mcp package only exists inside the image.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from datetime import datetime, timezone
 from jules_client import (  # noqa: E402
     JulesError,
     _clean_sid,
@@ -29,6 +30,8 @@ from jules_client import (  # noqa: E402
     _process_activities,
     _extract_latest_activity_info,
     _determine_assessment,
+    _calculate_activity_timing,
+    _check_agent_awaiting_reply,
     audit_session,
 )
 
@@ -210,6 +213,39 @@ class AuditSessionTests(unittest.TestCase):
         self.assertEqual(res["pull_request_url"], "https://github.com/foo/bar/pull/42")
         self.assertEqual(res["source"], "github.com/foo/bar")
         self.assertEqual(res["branch"], "main")
+
+    def test_check_agent_awaiting_reply(self):
+        self.assertFalse(_check_agent_awaiting_reply("user", "Does this look good?"))
+        self.assertFalse(_check_agent_awaiting_reply("agent", ""))
+        self.assertFalse(_check_agent_awaiting_reply("agent", "I have implemented the change."))
+        self.assertTrue(_check_agent_awaiting_reply("agent", "Please confirm if you want me to proceed."))
+        self.assertTrue(_check_agent_awaiting_reply("agent", "Does this look good to you?"))
+        self.assertTrue(_check_agent_awaiting_reply("agent", "Any feedback on this approach?"))
+
+    def test_calculate_activity_timing(self):
+        fixed_now = datetime(2025, 1, 1, 2, 0, 0, tzinfo=timezone.utc)
+        latest_act = "2025-01-01T01:30:00Z"
+        created = "2025-01-01T00:00:00Z"
+        updated = "2025-01-01T01:30:00Z"
+
+        inactive_mins, age_days, is_inactive = _calculate_activity_timing(
+            latest_act, created, updated, max_age_days=30, now=fixed_now
+        )
+        self.assertAlmostEqual(inactive_mins, 30.0)
+        self.assertAlmostEqual(age_days, 2.0 / 24.0)
+        self.assertFalse(is_inactive)
+
+        # Over max age threshold
+        _, _, is_inactive_old = _calculate_activity_timing(
+            latest_act, created, updated, max_age_days=0.05, now=fixed_now
+        )
+        self.assertTrue(is_inactive_old)
+
+        # Missing timestamps handled gracefully
+        in_m, a_d, is_in = _calculate_activity_timing("", "", "", max_age_days=30, now=fixed_now)
+        self.assertEqual(in_m, 0.0)
+        self.assertEqual(a_d, 0.0)
+        self.assertFalse(is_in)
 
 
 if __name__ == "__main__":

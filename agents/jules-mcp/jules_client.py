@@ -575,141 +575,156 @@ def _extract_session_pr_url(session_data: dict[str, Any]) -> str:
     return ""
 
 
+def _check_agent_awaiting_reply(last_speaker: str, last_agent_message: str) -> bool:
+    """Check if the last message was from the agent and prompts for user feedback."""
+    if last_speaker != "agent" or not last_agent_message:
+        return False
+    lower_msg = last_agent_message.lower()
+    return any(q in lower_msg for q in ["confirm", "approve", "proceed", "look good", "?", "let me know", "feedback"])
+
+
+def _handle_activity_event(
+    a: dict[str, Any],
+    state: dict[str, Any],
+) -> None:
+    """Apply a single timeline activity event to the accumulator state dict."""
+    t = a.get("createTime", "")
+    aid = a.get("id", "")
+
+    if "planGenerated" in a:
+        p = (a["planGenerated"] or {}).get("plan", {})
+        pid = p.get("id", "")
+        steps = [s.get("title", "") for s in p.get("steps", [])]
+        state["plans"].append({"id": pid, "time": t, "steps": steps})
+        state["pending_plan_id"] = pid
+        state["conversation_history"].append({
+            "role": "agent",
+            "type": "plan_generated",
+            "time": t,
+            "id": aid,
+            "content": f"Generated plan '{pid}' with {len(steps)} steps.",
+            "plan": p,
+        })
+
+    if "planApproved" in a:
+        pid = (a["planApproved"] or {}).get("planId", "")
+        state["pending_plan_id"] = ""
+        state["conversation_history"].append({
+            "role": "user",
+            "type": "plan_approved",
+            "time": t,
+            "id": aid,
+            "content": f"Plan '{pid}' approved.",
+        })
+
+    if "progressUpdated" in a:
+        state["pending_plan_id"] = ""
+        pu = a["progressUpdated"] or {}
+        pu_title = pu.get("title", "")
+        pu_desc = pu.get("description", "")
+        if "reviewed" in pu_title.lower() or "review" in pu_desc.lower():
+            state["code_reviews"].append({"time": t, "title": pu_title, "description": pu_desc})
+            state["conversation_history"].append({
+                "role": "agent",
+                "type": "code_review",
+                "time": t,
+                "id": aid,
+                "content": f"Code review: {pu_title}",
+                "review": pu,
+            })
+
+    if "userMessaged" in a:
+        user_msg = (a["userMessaged"] or {}).get("userMessage", "").strip()
+        state["user_message_count"] += 1
+        state["unanswered_user_messages"] += 1
+        state["last_user_message"] = user_msg
+        state["last_user_time"] = t
+        state["conversation_history"].append({
+            "role": "user",
+            "type": "message",
+            "time": t,
+            "id": aid,
+            "content": user_msg,
+        })
+
+    if "agentMessaged" in a:
+        agent_msg = (a["agentMessaged"] or {}).get("agentMessage", "").strip()
+        state["agent_message_count"] += 1
+        state["unanswered_user_messages"] = 0
+        state["last_agent_message"] = agent_msg
+        state["last_agent_time"] = t
+        state["conversation_history"].append({
+            "role": "agent",
+            "type": "message",
+            "time": t,
+            "id": aid,
+            "content": agent_msg,
+        })
+
+    if "sessionCompleted" in a:
+        state["conversation_history"].append({
+            "role": "system",
+            "type": "session_completed",
+            "time": t,
+            "id": aid,
+            "content": "Session completed.",
+        })
+
+
 def _process_activities(
     prompt: str,
     created_time: str,
     activities_list: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Parse activities timeline into conversation history, reviews, plans, and message counts."""
-    conversation_history: list[dict[str, Any]] = []
-    code_reviews: list[dict[str, Any]] = []
-    plans: list[dict[str, Any]] = []
-    pending_plan_id = ""
-    user_message_count = 0
-    agent_message_count = 0
-    unanswered_user_messages = 0
-    last_user_message = ""
-    last_user_time = ""
-    last_agent_message = ""
-    last_agent_time = ""
+    state: dict[str, Any] = {
+        "conversation_history": [],
+        "code_reviews": [],
+        "plans": [],
+        "pending_plan_id": "",
+        "user_message_count": 0,
+        "agent_message_count": 0,
+        "unanswered_user_messages": 0,
+        "last_user_message": "",
+        "last_user_time": "",
+        "last_agent_message": "",
+        "last_agent_time": "",
+    }
 
     if prompt:
-        conversation_history.append({
+        state["conversation_history"].append({
             "role": "user",
             "type": "prompt",
             "time": created_time,
             "id": "initial-prompt",
             "content": prompt,
         })
-        user_message_count += 1
-        unanswered_user_messages += 1
-        last_user_message = prompt
-        last_user_time = created_time
+        state["user_message_count"] += 1
+        state["unanswered_user_messages"] += 1
+        state["last_user_message"] = prompt
+        state["last_user_time"] = created_time
 
     for a in activities_list:
-        t = a.get("createTime", "")
-        aid = a.get("id", "")
+        _handle_activity_event(a, state)
 
-        if "planGenerated" in a:
-            p = (a["planGenerated"] or {}).get("plan", {})
-            pid = p.get("id", "")
-            steps = [s.get("title", "") for s in p.get("steps", [])]
-            plans.append({"id": pid, "time": t, "steps": steps})
-            pending_plan_id = pid
-            conversation_history.append({
-                "role": "agent",
-                "type": "plan_generated",
-                "time": t,
-                "id": aid,
-                "content": f"Generated plan '{pid}' with {len(steps)} steps.",
-                "plan": p,
-            })
-
-        if "planApproved" in a:
-            pid = (a["planApproved"] or {}).get("planId", "")
-            pending_plan_id = ""
-            conversation_history.append({
-                "role": "user",
-                "type": "plan_approved",
-                "time": t,
-                "id": aid,
-                "content": f"Plan '{pid}' approved.",
-            })
-
-        if "progressUpdated" in a:
-            pending_plan_id = ""
-            pu = a["progressUpdated"] or {}
-            pu_title = pu.get("title", "")
-            pu_desc = pu.get("description", "")
-            if "reviewed" in pu_title.lower() or "review" in pu_desc.lower():
-                code_reviews.append({"time": t, "title": pu_title, "description": pu_desc})
-                conversation_history.append({
-                    "role": "agent",
-                    "type": "code_review",
-                    "time": t,
-                    "id": aid,
-                    "content": f"Code review: {pu_title}",
-                    "review": pu,
-                })
-
-        if "userMessaged" in a:
-            user_msg = (a["userMessaged"] or {}).get("userMessage", "").strip()
-            user_message_count += 1
-            unanswered_user_messages += 1
-            last_user_message = user_msg
-            last_user_time = t
-            conversation_history.append({
-                "role": "user",
-                "type": "message",
-                "time": t,
-                "id": aid,
-                "content": user_msg,
-            })
-
-        if "agentMessaged" in a:
-            agent_msg = (a["agentMessaged"] or {}).get("agentMessage", "").strip()
-            agent_message_count += 1
-            unanswered_user_messages = 0
-            last_agent_message = agent_msg
-            last_agent_time = t
-            conversation_history.append({
-                "role": "agent",
-                "type": "message",
-                "time": t,
-                "id": aid,
-                "content": agent_msg,
-            })
-
-        if "sessionCompleted" in a:
-            conversation_history.append({
-                "role": "system",
-                "type": "session_completed",
-                "time": t,
-                "id": aid,
-                "content": "Session completed.",
-            })
-
-    last_speaker = conversation_history[-1]["role"] if conversation_history else "none"
-    agent_awaiting_reply = False
-    if last_speaker == "agent" and last_agent_message:
-        lower_msg = last_agent_message.lower()
-        if any(q in lower_msg for q in ["confirm", "approve", "proceed", "look good", "?", "let me know", "feedback"]):
-            agent_awaiting_reply = True
+    history = state["conversation_history"]
+    last_speaker = history[-1]["role"] if history else "none"
+    agent_awaiting_reply = _check_agent_awaiting_reply(last_speaker, state["last_agent_message"])
 
     return {
-        "conversation_history": conversation_history,
-        "code_reviews": code_reviews,
-        "plans": plans,
-        "pending_plan_id": pending_plan_id,
-        "user_message_count": user_message_count,
-        "agent_message_count": agent_message_count,
-        "unanswered_user_messages": unanswered_user_messages,
+        "conversation_history": state["conversation_history"],
+        "code_reviews": state["code_reviews"],
+        "plans": state["plans"],
+        "pending_plan_id": state["pending_plan_id"],
+        "user_message_count": state["user_message_count"],
+        "agent_message_count": state["agent_message_count"],
+        "unanswered_user_messages": state["unanswered_user_messages"],
         "agent_awaiting_reply": agent_awaiting_reply,
         "last_speaker": last_speaker,
-        "last_user_message": last_user_message,
-        "last_user_time": last_user_time,
-        "last_agent_message": last_agent_message,
-        "last_agent_time": last_agent_time,
+        "last_user_message": state["last_user_message"],
+        "last_user_time": state["last_user_time"],
+        "last_agent_message": state["last_agent_message"],
+        "last_agent_time": state["last_agent_time"],
     }
 
 
@@ -774,6 +789,38 @@ def _determine_assessment(
     return state
 
 
+def _calculate_activity_timing(
+    latest_activity_time: str,
+    created_time: str,
+    updated_time: str,
+    max_age_days: int = 30,
+    now: datetime | None = None,
+) -> tuple[float, float, bool]:
+    """Calculate inactive minutes, age in days, and inactivity status."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    inactive_mins = 0.0
+    if latest_activity_time:
+        try:
+            act_dt = parse_iso_datetime(latest_activity_time)
+            inactive_mins = max(0.0, (now - act_dt).total_seconds() / 60.0)
+        except Exception:
+            pass
+
+    created_str = created_time or updated_time
+    age_days = 0.0
+    if created_str:
+        try:
+            c_dt = parse_iso_datetime(created_str)
+            age_days = max(0.0, (now - c_dt).total_seconds() / 86400.0)
+        except Exception:
+            pass
+
+    is_inactive = bool(max_age_days is not None and max_age_days > 0 and age_days > max_age_days)
+    return inactive_mins, age_days, is_inactive
+
+
 def _audit_session_data(
     session_data: dict[str, Any],
     activities_list: list[dict[str, Any]],
@@ -797,28 +844,10 @@ def _audit_session_data(
     prompt = session_data.get("prompt", "").strip()
 
     proc = _process_activities(prompt, created_time, activities_list)
-
     latest_activity_time, latest_type, latest_detail = _extract_latest_activity_info(activities_list, updated_time)
-
-    now = datetime.now(timezone.utc)
-    inactive_mins = 0.0
-    if latest_activity_time:
-        try:
-            act_dt = parse_iso_datetime(latest_activity_time)
-            inactive_mins = max(0.0, (now - act_dt).total_seconds() / 60.0)
-        except Exception:
-            pass
-
-    created_str = created_time or updated_time
-    age_days = 0.0
-    if created_str:
-        try:
-            c_dt = parse_iso_datetime(created_str)
-            age_days = max(0.0, (now - c_dt).total_seconds() / 86400.0)
-        except Exception:
-            pass
-
-    is_inactive = bool(max_age_days is not None and max_age_days > 0 and age_days > max_age_days)
+    inactive_mins, age_days, is_inactive = _calculate_activity_timing(
+        latest_activity_time, created_time, updated_time, max_age_days=max_age_days
+    )
 
     assessment = _determine_assessment(
         is_inactive=is_inactive,
