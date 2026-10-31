@@ -8,16 +8,18 @@
 set -euo pipefail
 
 MODELS_PRESET="${MODELS_PRESET:-/app/models.ini}"
-LLAMA_PORT="${LLAMA_PORT:-8082}"
-LITELLM_PORT="${LITELLM_PORT:-8080}"
+LLAMA_PORT=8081
+LITELLM_PORT=8080
 MODELS_MAX="${MODELS_MAX:-1}"
-API_BASE="http://127.0.0.1:${LLAMA_PORT}"
+API_BASE="http://127.0.0.1:8081"
 
+export LLAMA_CACHE="${LLAMA_CACHE:-/models}"
+export HF_HOME="${HF_HOME:-/models}"
 export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-cloak-local}"
 
 python3 /app/make_litellm_config.py \
     --models-preset "${MODELS_PRESET}" \
-    --api-base "${API_BASE}" \
+    --api-base "${API_BASE}/v1" \
     --output /tmp/litellm.yaml
 
 # Vulkan passthrough sanity check: fail fast (mirror of run.sh's guard) if the

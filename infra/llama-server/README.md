@@ -1,19 +1,48 @@
-# llama-server mode aliases (Vulkan) + LiteLLM proxy
+# llama-server (Vulkan) + LiteLLM native reasoning proxy
 
-Design for "many modes, one resident model" on the Vega 7 rig. llama-server has
-no native per-request reasoning toggle yet (upstream discussion #23351; the
-`enable_thinking` route via `chat_template_kwargs` is the request-level lever
-that still works, and token-budget capping stays startup-side), so the
+Design for "many configurations, one resident model" on the Vega 7 rig. Rather than
+creating clutter with dozens of `-*` suffixed model aliases (`utility-fast`, `utility-low`,
+`reason-medium`, etc.), LiteLLM serves as the model catalog gateway that advertises
+and supports native OpenAI `reasoning_effort` parameters on canonical model names.
 
-`low/medium/high` effect is replicated by LiteLLM injecting per-request
-`extra_body` fields and routing every alias to the **same** llama-server
-process. Nothing is ever loaded twice or unloaded to switch modes.
+## Native Reasoning Effort Support
+
+Clients (such as GitHub Copilot, Cursor, OpenAI Python SDK, or cURL) query the canonical
+base model name (`reason`, `reason-fast`, `utility`, etc.) and supply standard OpenAI
+`reasoning_effort` levels:
+
+| Effort Level | Behavior | Supported Models |
+| :--- | :--- | :--- |
+| `"none"` | Thinking is disabled completely; generates content immediately | `utility` (default), `reason`, `reason-fast`, `reason-low`, `reason-low-mtp` |
+| `"low"` | Thinking enabled | `reason`, `reason-fast`, `reason-low`, `reason-low-mtp`, `utility` |
+| `"medium"` | Thinking enabled (default for reasoning seats) | `reason` (default), `reason-fast` (default), `reason-low` (default), `reason-low-mtp` (default), `utility` |
+| `"high"` | Thinking enabled | `reason`, `reason-fast`, `reason-low`, `reason-low-mtp`, `utility` |
+
+### Separation of Responsibilities
+
+- **LiteLLM layer** (`make_litellm_config.py`):
+  Advertises `supports_reasoning: true`, `reasoning_effort_levels`, and `supported_openai_params: ["reasoning_effort"]`
+  via `model_info`. For `utility`, defaults to `reasoning_effort: "none"` for deterministic non-thinking speed unless explicitly requested.
+- **llama-server layer** (`models.ini`):
+  Contains ONLY the canonical base models with short names and REQUIRED hardware configurations
+  (flash attention, KV cache quantisation, context size, ubatch size, parallelism,
+  and sampler plates). No preset budget rungs.
+
+## Model Catalog
+
+Canonical models exposed directly without `-*` suffixes:
+- General / Chat: `chat`
+- Coding: `code`, `fim`
+- Reasoning: `reason`, `reason-fast`, `reason-low`, `reason-low-mtp`
+- Structured & Utility: `utility`, `decision`
+- Multimodal: `vision`, `ocr`
+- Search & Audio: `embed`, `rerank`, `asr`, `asr-ab-test`
 
 ## Layout
 
 | File | Role |
 | --- | --- |
-| `make_litellm_config.py` | Reads `models.ini` sections, emits the LiteLLM `model_list` with `-low` / `-medium` / `-high` aliases per group |
+| `make_litellm_config.py` | Reads `models.ini`, emits the LiteLLM `model_list`: base passthrough aliases + the six-rung ladder per family targeting `openai/{family}` with `extra_body` |
 | `entrypoint.sh` | Starts the router (`--models-preset`, `--models-max 1`), waits for `/health`, then shepherds LiteLLM in front |
 | root `Dockerfile` / `docker-compose.yml` | Vulkan passthrough image (`/dev/dri` + RADV), latest llama.cpp Ubuntu x64 release binary |
 
@@ -24,31 +53,32 @@ RENDER_GID=$(stat -c %g /dev/dri/renderD128) docker compose up --build
 ```
 
 Clients hit `http://localhost:8080/v1` with `Authorization: Bearer $LITELLM_MASTER_KEY`
-(default `sk-cloak-local`), using model names like `reason`, `reason-low`,
-`reason-medium`, `reason-high`. Embedding/rerank groups get their plain alias
-only (`embed`, `rerank`).
+(default `sk-cloak-local`), using canonical model names like `reason`, `reason-fast`,
+or `utility`, optionally passing `"reasoning_effort": "none" | "low" | "medium" | "high"`.
 
-## Probe that a mode actually toggles
+## Probing Reasoning Effort
 
 ```sh
+# 1. Non-thinking generation (immediate response, no thinking tokens)
 curl -fsS http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${LITELLM_MASTER_KEY:-sk-cloak-local}" \
-  -d '{"model":"reason-low","messages":[{"role":"user","content":"2+2?"}],"max_tokens":256}' \
-  | jq '.choices[0].message'
+  -d '{"model":"utility","messages":[{"role":"user","content":"2+2?"}],"reasoning_effort":"none","max_tokens":256}' \
+  | jq '{reasoning: (.choices[0].message.reasoning_content // "" | length), content: .choices[0].message.content}'
+
+# 2. Reasoning-enabled generation (includes reasoning_content)
+curl -fsS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${LITELLM_MASTER_KEY:-sk-cloak-local}" \
+  -d '{"model":"reason","messages":[{"role":"user","content":"2+2?"}],"reasoning_effort":"medium","max_tokens":256}' \
+  | jq '{reasoning: (.choices[0].message.reasoning_content // "" | length), content: .choices[0].message.content}'
 ```
 
-Count `reasoning_content` tokens on `reason-low` vs `reason-high`. If a
-template family ignores per-request `enable_thinking` (the >= b8322 Qwen3.5
-deprecation pattern), all three modes collapse to the group default - the
-probe makes that visible instead of assumed.
+Compare `reasoning` length across `utility-fast` (0), `-low` (<= 256 tokens),
+and `-max`.
 
-## Honest caveats
+## Notes & Rails
 
-- **Token-budget caps are still not per-request.** True `--reasoning-budget`
-  ladders (like `[utility]`'s budget 128) remain per-section startup config in
-  `models.ini`. When upstream lands a first-class per-request field (extend
-  `MODE_BODIES` in `make_litellm_config.py` at that point).
 - **The run.sh thermal guard is host-side by design.** The container cannot
   reparent CPU boost / EPP / OverDrive clocks / `timeout_period`; keep `run.sh`
   if you need those rails while serving from Docker.

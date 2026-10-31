@@ -3,7 +3,7 @@
 .git/
 .github/
 docs/
-infra/
+!infra/llama-server/
 clients/
 plugins/
 compiler/

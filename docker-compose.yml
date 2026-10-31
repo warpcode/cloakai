@@ -4,10 +4,10 @@
 # Run (render GID varies per host, pass it explicitly):
 #   RENDER_GID=$(stat -c %g /dev/dri/renderD128) docker compose up --build
 #
-# Mode aliases (same resident model, request-time tweaks only):
-#   <group>-low     thinking off
-#   <group>-medium  thinking on, vendor default
-#   <group>-high    thinking on, high effort
+# Mode aliases (same resident model; six-rung reasoning ladder):
+#   <group>-fast   thinking off (budget 0, effort none)
+#   <group>-low/-medium/-high/-vhigh/-max = budget rungs 256/2048/4096/8192/16384
+#   Effort rungs are managed in LiteLLM via extra_body; llama-server never unloads models.
 #
 # Accepts the same Vulkan stabiliser envs run.sh exports on the host rig.
 # ==============================================================================
@@ -26,23 +26,23 @@ services:
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - "${RENDER_GID:?RENDER_GID isn't set - RENDER_GID=\$(stat -c %g /dev/dri/renderD128)}"
+      - "${RENDER_GID:-107}"
     environment:
       # Same rz-rig stabilisers as run.sh (host thermal guard stays host-side).
       radv_enable_unified_heap_on_apu: "true"
       GGML_VK_FORCE_MAX_ALLOCATION_SIZE: "3221225472"
       GGML_VK_MAX_NODES_PER_SUBMIT: "1"
+      GGML_BACKEND_PATH: "/usr/local/lib/libggml-vulkan.so"
       LLAMA_OFFLINE: "${LLAMA_OFFLINE:-0}"
+      LLAMA_CACHE: "/models"
+      HF_HOME: "/models"
       LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-cloak-local}"
-      LITELLM_PORT: "8080"
-      LLAMA_PORT: "8082"
       MODELS_MAX: "${MODELS_MAX:-1}"
     volumes:
       # Live tuned fleet recipe; edit host-side, restart container to apply.
       - ./models.ini:/app/models.ini:ro
       # Model blob cache shared with the host llama-server installation.
-      - ${HOME}/.cache/llama.cpp:/data/llama-cache
+      - ${HOME}/.cache/llama.cpp:/models
     ports:
       - "8080:8080" # LiteLLM (mode aliases) - the endpoint clients hit
-      # - "8082:8082" # router internals (webui disabled) - uncomment to debug
     restart: unless-stopped

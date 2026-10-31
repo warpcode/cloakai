@@ -3,11 +3,16 @@
 # cloakai root image: llama.cpp router (Vulkan passthrough) + LiteLLM mode proxy
 # ------------------------------------------------------------------------------
 # One resident copy of every model in models.ini, many request-time aliases:
-#     <group>-low     thinking off (fast lane)
-#     <group>-medium  thinking on, vendor default effort
-#     <group>-high    thinking on, high effort
-# Modes are injectedLiteLLM as per-request fields routed to the SAME
-# llama-server process, so the core LLM is never duplicated or unloaded.
+# six-rung reasoning ladder per thinking family:
+#     <group>-fast    thinking off (budget 0, effort none, enable_thinking false)
+#     <group>-low     budget 256   (effort low, enable_thinking true)
+#     <group>-medium  budget 2048  (effort medium, enable_thinking true)
+#     <group>-high    budget 4096  (effort high, enable_thinking true)
+#     <group>-vhigh   budget 8192  (effort high, enable_thinking true)
+#     <group>-max     budget 16384 (effort high, enable_thinking true)
+# Configurations for thinking and effort levels are injected by LiteLLM via
+# extra_body routing to the SAME underlying model in llama-server (openai/<group>).
+# Switching between effort levels (e.g. low vs medium) never unloads or duplicates models.
 #
 # Container run (see docker-compose.yml):
 #   docker compose up --build
@@ -40,25 +45,43 @@ RUN apt-get update \
       curl \
       jq \
       unzip \
+      libgomp1 \
       libvulkan1 \
       mesa-vulkan-drivers \
       vulkan-tools \
  && rm -rf /var/lib/apt/lists/*
 
 # Latest llama.cpp server binary (official Ubuntu Vulkan x64 release asset).
-# The release zip layout has changed before, so resolve the binary by find().
+# The release asset can be tar.gz or zip and contains shared libraries alongside binaries.
 RUN set -eux; \
-    url="$(curl -fsSL "https://api.github.com/repos/ggml-org/llama.cpp/releases/${LLAMA_TAG}" \
-      | jq -r '[.assets[].browser_download_url] \
-               | map(select(test("ubuntu.*vulkan.*x64.*\\.zip$"))) \
-               | .[0] // empty')"; \
+    if [ "${LLAMA_TAG}" = "latest" ]; then \
+        api_url="https://api.github.com/repos/ggml-org/llama.cpp/releases"; \
+        url="$(curl -fsSL "$api_url" \
+          | jq -r '[.[] | select(.assets | length > 5)] | .[0].assets[].browser_download_url \
+                   | select(test("ubuntu.*vulkan.*x64.*\\.(tar\\.gz|zip)$"))' \
+          | head -n 1)"; \
+    else \
+        api_url="https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/${LLAMA_TAG}"; \
+        url="$(curl -fsSL "$api_url" \
+          | jq -r '.assets[].browser_download_url \
+                   | select(test("ubuntu.*vulkan.*x64.*\\.(tar\\.gz|zip)$"))' \
+          | head -n 1)"; \
+    fi; \
     test -n "$url"; \
     echo "llama.cpp asset: ${url}"; \
-    curl -fsSL "$url" -o /tmp/llama.zip; \
-    unzip -q /tmp/llama.zip -d /tmp/llama; \
-    install -m 0755 "$(find /tmp/llama -type f -name llama-server -print -quit)" \
-        /usr/local/bin/llama-server; \
-    rm -rf /tmp/llama /tmp/llama.zip; \
+    mkdir -p /tmp/llama; \
+    if echo "$url" | grep -q '\.tar\.gz$'; then \
+        curl -fsSL "$url" | tar -xz -C /tmp/llama; \
+    else \
+        curl -fsSL "$url" -o /tmp/llama.zip; \
+        unzip -q /tmp/llama.zip -d /tmp/llama; \
+        rm -f /tmp/llama.zip; \
+    fi; \
+    find /tmp/llama -name "llama-server" -exec install -m 0755 {} /usr/local/bin/llama-server \; ; \
+    find /tmp/llama -name "*.so*" -exec cp -a {} /usr/local/lib/ \; ; \
+    find /tmp/llama -name "*.so*" -exec cp -a {} /usr/local/bin/ \; ; \
+    ldconfig; \
+    rm -rf /tmp/llama; \
     llama-server --version; \
     vulkaninfo --summary | head -n 40 || true
 
@@ -74,16 +97,18 @@ RUN chmod +x /app/entrypoint.sh /app/make_litellm_config.py
 
 # HF/GGUF cache lives on a bind mount so model blobs survive rebuilds and are
 # shared with any host-side llama-server usage of the same cache directory.
-ENV LLAMA_CACHE=/data/llama-cache \
+ENV GGML_BACKEND_PATH=/usr/local/lib/libggml-vulkan.so \
+    LLAMA_CACHE=/models \
+    HF_HOME=/models \
     MODELS_PRESET=/app/models.ini \
-    LLAMA_PORT=8082 \
-    LITELLM_PORT=8080 \
     MODELS_MAX=1
 
-EXPOSE 8080 8082
+RUN mkdir -p /models
+
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD curl -fsS "http://127.0.0.1:${LITELLM_PORT}/health/liveliness" || exit 1
+    CMD curl -fsS "http://127.0.0.1:8080/health/liveliness" || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 # Extra llama-server args can be appended via `docker ... <args>` / compose `command:`.

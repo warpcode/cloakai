@@ -74,10 +74,13 @@ restore_settings() {
     echo "GPU Ring Timeout: $(cat /sys/module/amdgpu/parameters/timeout_period 2>/dev/null || echo 'N/A')s"
 }
 
-# Pre-flight check: Refuse to run if llama-server was installed without Vulkan GPU support
-if ! llama-server --list-devices 2>/dev/null | grep -q "Vulkan"; then
-    echo "[llama-thermal-guard] ERROR: llama-server has no Vulkan backend (CPU-only build detected)!" >&2
-    echo "Run: mise install -f llama.cpp" >&2
+# Pre-flight check: Refuse to run if docker is missing or /dev/dri is absent
+if ! command -v docker &>/dev/null; then
+    echo "[llama-thermal-guard] ERROR: docker is not available in PATH!" >&2
+    exit 1
+fi
+if [[ ! -d /dev/dri ]]; then
+    echo "[llama-thermal-guard] ERROR: /dev/dri render device directory is missing!" >&2
     exit 1
 fi
 
@@ -151,5 +154,7 @@ echo "Vega 7 SCLK:      $(tr '\n' ' ' < /sys/class/drm/card1/device/pp_dpm_sclk 
 echo "Vega 7 OD SCLK:   $(awk '/^[01]:/{printf "%s %s  ", $1, $2}' /sys/class/drm/card1/device/pp_od_clk_voltage 2>/dev/null || echo 'N/A')"
 echo "GPU Ring Timeout: $(cat /sys/module/amdgpu/parameters/timeout_period 2>/dev/null || echo 'N/A')s"
 
-# Run llama.cpp
-llama-server --webui --models-preset models.ini --models-max 1 --host 0.0.0.0 --port 8081
+# Run docker compose container via docker compose run --rm
+RENDER_GID="${RENDER_GID:-$(stat -c %g /dev/dri/renderD128 2>/dev/null || echo 107)}"
+export RENDER_GID
+docker compose run --build --rm --service-ports llama-modes "$@"
