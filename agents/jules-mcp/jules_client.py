@@ -472,8 +472,8 @@ def extract_patch(
     }
 
 
-def _analyze_timeline(timeline: list[dict]) -> tuple[str, bool, int]:
-    """Scan timeline activities to extract pending plan, session completion, and unanswered user message count."""
+def _analyze_timeline(timeline: list[dict[str, Any]]) -> tuple[str, bool, int]:
+    """Scan timeline activities to extract pending plan ID, completion status, and unanswered message count."""
     pending_plan = ""
     completed_marker = False
     unanswered = 0
@@ -539,7 +539,7 @@ def _format_completed_verdict(
     return lines
 
 
-def _verdict(session: dict[str, Any], timeline: list[dict], complete: bool = True) -> list[str]:
+def _verdict(session: dict[str, Any], timeline: list[dict[str, Any]], complete: bool = True) -> list[str]:
     """Decide whether a session is actually finished, and say why.
 
     `state: COMPLETED` does NOT mean finished. Jules sets it when the runner goes

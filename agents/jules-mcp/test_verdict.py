@@ -25,7 +25,10 @@ from datetime import datetime, timezone
 
 from jules_client import (  # noqa: E402
     JulesError,
+    _analyze_timeline,
     _clean_sid,
+    _format_completed_verdict,
+    _format_waiting_verdict,
     _verdict,
     _extract_session_pr_url,
     _process_activities,
@@ -128,6 +131,103 @@ class Verdict(unittest.TestCase):
     def test_missing_state_is_not_treated_as_completed(self):
         out = self.text({}, [act(sessionCompleted={})])
         self.assertNotIn("went IDLE", out)
+
+
+class AnalyzeTimelineTests(unittest.TestCase):
+    def test_empty_timeline(self):
+        pending_plan, completed_marker, unanswered = _analyze_timeline([])
+        self.assertEqual(pending_plan, "")
+        self.assertFalse(completed_marker)
+        self.assertEqual(unanswered, 0)
+
+    def test_plan_generated_and_pending(self):
+        timeline = [act(planGenerated={"plan": {"id": "plan-123"}})]
+        pending_plan, completed_marker, unanswered = _analyze_timeline(timeline)
+        self.assertEqual(pending_plan, "plan-123")
+        self.assertFalse(completed_marker)
+        self.assertEqual(unanswered, 0)
+
+    def test_plan_approved_clears_pending_plan(self):
+        timeline = [
+            act(planGenerated={"plan": {"id": "plan-123"}}),
+            act(planApproved={"planId": "plan-123"}),
+        ]
+        pending_plan, completed_marker, unanswered = _analyze_timeline(timeline)
+        self.assertEqual(pending_plan, "")
+
+    def test_progress_updated_clears_pending_plan(self):
+        timeline = [
+            act(planGenerated={"plan": {"id": "plan-123"}}),
+            act(progressUpdated={"title": "Step 1 in progress"}),
+        ]
+        pending_plan, completed_marker, unanswered = _analyze_timeline(timeline)
+        self.assertEqual(pending_plan, "")
+
+    def test_session_completed_marker_detected(self):
+        timeline = [act(sessionCompleted={})]
+        pending_plan, completed_marker, unanswered = _analyze_timeline(timeline)
+        self.assertTrue(completed_marker)
+
+    def test_user_messages_accumulate_until_agent_reply(self):
+        timeline = [
+            act(userMessaged={"userMessage": "first question"}),
+            act(userMessaged={"userMessage": "second question"}),
+        ]
+        pending_plan, completed_marker, unanswered = _analyze_timeline(timeline)
+        self.assertEqual(unanswered, 2)
+
+        timeline.append(act(agentMessaged={"agentMessage": "answering both"}))
+        pending_plan, completed_marker, unanswered = _analyze_timeline(timeline)
+        self.assertEqual(unanswered, 0)
+
+
+class FormatWaitingVerdictTests(unittest.TestCase):
+    def test_no_waiting_conditions(self):
+        lines = _format_waiting_verdict("", 0)
+        self.assertEqual(lines, [])
+
+    def test_pending_plan_only(self):
+        lines = _format_waiting_verdict("plan-99", 0)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("WAITING: plan 'plan-99' is generated but not approved", lines[0])
+        self.assertIn("jules_approve_plan", lines[0])
+
+    def test_unanswered_messages_only(self):
+        lines = _format_waiting_verdict("", 3)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("WAITING: 3 message(s) from you have not been answered", lines[0])
+
+    def test_both_pending_plan_and_unanswered_messages(self):
+        lines = _format_waiting_verdict("plan-42", 2)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("plan-42", lines[0])
+        self.assertIn("2 message(s)", lines[1])
+
+
+class FormatCompletedVerdictTests(unittest.TestCase):
+    def test_idle_waiting_on_human(self):
+        lines = _format_completed_verdict(pending_plan="p-1", waiting_on_us=False, completed_marker=False, complete=True)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("state=COMPLETED means the runner went IDLE", lines[0])
+
+        lines_msg = _format_completed_verdict(pending_plan="", waiting_on_us=True, completed_marker=False, complete=True)
+        self.assertEqual(len(lines_msg), 1)
+        self.assertIn("state=COMPLETED means the runner went IDLE", lines_msg[0])
+
+    def test_completed_marker_present(self):
+        lines = _format_completed_verdict(pending_plan="", waiting_on_us=False, completed_marker=True, complete=True)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("finished: the session emitted a sessionCompleted marker", lines[0])
+
+    def test_complete_timeline_without_marker(self):
+        lines = _format_completed_verdict(pending_plan="", waiting_on_us=False, completed_marker=False, complete=True)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("low confidence", lines[0])
+
+    def test_truncated_timeline_without_marker(self):
+        lines = _format_completed_verdict(pending_plan="", waiting_on_us=False, completed_marker=False, complete=False)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("timeline was truncated", lines[0])
 
 
 class CleanSessionId(unittest.TestCase):
