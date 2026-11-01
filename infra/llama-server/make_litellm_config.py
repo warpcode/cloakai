@@ -1,33 +1,186 @@
 #!/usr/bin/env python3
-"""Generate the LiteLLM proxy config with native reasoning effort support.
+"""Generate the LiteLLM proxy config with role aliasing and native reasoning effort.
 
-Exposes only the canonical base models defined in models.ini (no -* suffixes).
-Thinking-capable families advertise native reasoning support and effort levels
-via model_info so standard OpenAI reasoning clients (e.g. Copilot, Cursor) can
-pass reasoning_effort directly ("none", "low", "medium", "high").
+`models.ini` defines each underlying GGUF model once by its model slug with
+only engine/hardware load physics (context size, parallelism, KV quantisation,
+flash attention, speculative decoding). LiteLLM defines the role-based aliases
+(`utility`, `reason-fast`, `reason-low`, `chat`, `code`, etc.), routing multiple
+roles that share a backbone (e.g. `utility` and `reason-fast` -> `lfm3-1.7b`,
+`reason-low` and `reason-low-mtp` -> `qwen3.5-4b`) to the SAME resident
+`llama-server` process without triggering a model swap, while injecting
+per-role sampling parameters and reasoning configuration.
 """
 
 import argparse
 import configparser
+import copy
 import sys
 
 import yaml
 
-# Sections that have reasoning / thinking capabilities
-THINKING_MODELS = {
-    "reason",
-    "reason-fast",
-    "reason-low",
-    "reason-low-mtp",
-    "utility",
-}
-
 # Sections that are purely non-thinking or specialized tasks
 NON_THINKING_KEYS = ("embeddings", "reranking")
+
+# Role alias definitions mapped to canonical model slugs in models.ini.
+# Multiple roles can target the same `backend` section so switching between
+# them (e.g. `utility` <-> `reason-fast`) never unloads or swaps the model.
+ROLE_ALIASES: list[dict] = [
+    {
+        "model_name": "chat",
+        "backend": "gemma-4-e4b",
+        "params": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "extra_body": {"top_k": 64},
+        },
+    },
+    {
+        "model_name": "fim",
+        "backend": "qwen2.5-coder-3b",
+        "params": {
+            "temperature": 0.0,
+        },
+    },
+    {
+        "model_name": "code",
+        "backend": "spark-x2.6-4b",
+        "params": {
+            "temperature": 0.2,
+            "top_p": 0.9,
+        },
+    },
+    {
+        "model_name": "reason",
+        "backend": "ornith-1.5-9b",
+        "thinking": True,
+        "default_reasoning_effort": "medium",
+        "params": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "presence_penalty": 0.0,
+            "extra_body": {"top_k": 20, "min_p": 0.0},
+        },
+    },
+    {
+        "model_name": "reason-fast",
+        "backend": "lfm3-1.7b",
+        "thinking": True,
+        "default_reasoning_effort": "medium",
+        "params": {
+            "temperature": 0.1,
+            "extra_body": {
+                "top_k": 50,
+                "repeat_penalty": 1.1,
+                "chat_template_kwargs": {"enable_thinking": True},
+            },
+        },
+    },
+    {
+        "model_name": "utility",
+        "backend": "lfm3-1.7b",
+        "thinking": True,
+        "default_reasoning_effort": "none",
+        "params": {
+            "temperature": 0.1,
+            "reasoning_effort": "none",
+            "extra_body": {
+                "top_k": 50,
+                "repeat_penalty": 1.1,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        },
+    },
+    {
+        "model_name": "reason-low",
+        "backend": "qwen3.5-4b",
+        "thinking": True,
+        "default_reasoning_effort": "medium",
+        "params": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "presence_penalty": 0.0,
+            "extra_body": {"top_k": 20, "min_p": 0.0},
+        },
+    },
+    {
+        "model_name": "reason-low-mtp",
+        "backend": "qwen3.5-4b",
+        "thinking": True,
+        "default_reasoning_effort": "medium",
+        "params": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "presence_penalty": 0.0,
+            "extra_body": {"top_k": 20, "min_p": 0.0},
+        },
+    },
+    {
+        "model_name": "vision",
+        "backend": "lfm3-vl-2b",
+        "params": {
+            "temperature": 0.2,
+            "extra_body": {
+                "top_k": 50,
+                "repeat_penalty": 1.1,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        },
+    },
+    {
+        "model_name": "ocr",
+        "backend": "paddleocr-vl-1.6",
+        "params": {
+            "temperature": 0.0,
+        },
+    },
+    {
+        "model_name": "decision",
+        "backend": "kev-0.8b",
+        "params": {
+            "temperature": 0.0,
+        },
+    },
+    {
+        "model_name": "embed",
+        "backend": "embeddinggemma-2",
+        "params": {},
+    },
+    {
+        "model_name": "rerank",
+        "backend": "qwen3-reranker-0.6b",
+        "params": {},
+    },
+    {
+        "model_name": "asr",
+        "backend": "qwen3-asr-0.6b",
+        "params": {},
+    },
+    {
+        "model_name": "asr-ab-test",
+        "backend": "parakeet-unified-en-0.6b",
+        "params": {},
+    },
+]
+
+
+SLOT_CACHE: dict[str, int] = {}
+
+def _slot_ctx(sec: configparser.SectionProxy, default_parallel: int) -> int:
+    # Cache slot context per section to avoid repeated calculations.
+    # SectionProxy objects are unhashable, so key on the section name.
+    name = sec.name
+    if name in SLOT_CACHE:
+        return SLOT_CACHE[name]
+    ctx_size = sec.get("ctx-size")
+    parallel = int(sec.get("parallel", default_parallel))
+    result = int(ctx_size) // parallel if ctx_size else 32768
+    SLOT_CACHE[name] = result
+    return result
 
 
 def build_config(ini: configparser.ConfigParser, api_base: str) -> dict:
     sections = [s for s in ini.sections() if s != "*"]
+    available_sections = set(sections)
     default_parallel = int(ini["*"].get("parallel", "1")) if "*" in ini else 1
 
     base_params = {
@@ -39,42 +192,63 @@ def build_config(ini: configparser.ConfigParser, api_base: str) -> dict:
     }
 
     model_list = []
-    for name in sections:
-        params = {"model": f"openai/{name}", **base_params}
+    mapped_backends = set()
 
-        # Utility defaults to deterministic non-thinking unless reasoning_effort is explicitly requested
-        if name == "utility":
-            params["reasoning_effort"] = "none"
+    for spec in ROLE_ALIASES:
+        backend = spec["backend"]
+        if backend not in available_sections:
+            continue
+        mapped_backends.add(backend)
+        sec = ini[backend]
+        slot_ctx = _slot_ctx(sec, default_parallel)
 
-        sec = ini[name]
-        ctx_size = sec.get("ctx-size")
-        parallel = int(sec.get("parallel", default_parallel))
-        if ctx_size:
-            slot_ctx = int(ctx_size) // parallel
-        else:
-            slot_ctx = 32768
+        params = {
+            "model": f"openai/{backend}",
+            **base_params,
+            **copy.deepcopy(spec.get("params", {})),
+        }
 
-        model_info = {
+        model_info: dict = {
             "max_input_tokens": slot_ctx,
             "max_tokens": slot_ctx,
         }
 
-        # Advertise native reasoning support on thinking-capable models
-        if name in THINKING_MODELS and not any(k in sec for k in NON_THINKING_KEYS):
-            model_info.update({
-                "supports_reasoning": True,
-                "reasoning_effort_levels": ["none", "low", "medium", "high"],
-                "default_reasoning_effort": "none" if name == "utility" else "medium",
-                "supported_openai_params": ["reasoning_effort"],
-            })
+        if spec.get("thinking") and not any(k in sec for k in NON_THINKING_KEYS):
+            model_info.update(
+                {
+                    "supports_reasoning": True,
+                    "reasoning_effort_levels": ["none", "low", "medium", "high"],
+                    "default_reasoning_effort": spec.get("default_reasoning_effort", "medium"),
+                    "supported_openai_params": ["reasoning_effort"],
+                }
+            )
 
         entry = {
-            "model_name": name,
+            "model_name": spec["model_name"],
             "litellm_params": params,
             "model_info": model_info,
         }
-
         model_list.append(entry)
+
+    # Fallback passthrough for any custom/unmapped section in models.ini
+    for name in sections:
+        if name in mapped_backends:
+            continue
+        sec = ini[name]
+        slot_ctx = _slot_ctx(sec, default_parallel)
+        model_list.append(
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": f"openai/{name}",
+                    **base_params,
+                },
+                "model_info": {
+                    "max_input_tokens": slot_ctx,
+                    "max_tokens": slot_ctx,
+                },
+            }
+        )
 
     return {
         "model_list": model_list,

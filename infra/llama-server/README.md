@@ -21,28 +21,33 @@ base model name (`reason`, `reason-fast`, `utility`, etc.) and supply standard O
 ### Separation of Responsibilities
 
 - **LiteLLM layer** (`make_litellm_config.py`):
-  Advertises `supports_reasoning: true`, `reasoning_effort_levels`, and `supported_openai_params: ["reasoning_effort"]`
-  via `model_info`. For `utility`, defaults to `reasoning_effort: "none"` for deterministic non-thinking speed unless explicitly requested.
+  Defines all role-based model aliases (`chat`, `code`, `fim`, `reason`, `reason-fast`, `utility`, `reason-low`, `vision`, `ocr`, `decision`, `embed`, `rerank`, `asr`), routing multiple roles that share an underlying GGUF model (e.g. `utility` and `reason-fast` -> `openai/lfm3-1.7b`, `reason-low` and `reason-low-mtp` -> `openai/qwen3.5-4b`) to the **same resident `llama-server` section** so switching between them never triggers a model swap. Also injects per-role sampling parameters (`temperature`, `top_p`, `top_k`, `repeat_penalty`, `min_p`, `presence_penalty`, `chat_template_kwargs`) and advertises `supports_reasoning: true`, `reasoning_effort_levels`, and `supported_openai_params: ["reasoning_effort"]` via `model_info`.
 - **llama-server layer** (`models.ini`):
-  Contains ONLY the canonical base models with short names and REQUIRED hardware configurations
-  (flash attention, KV cache quantisation, context size, ubatch size, parallelism,
-  and sampler plates). No preset budget rungs.
+  Contains a **single entry per unique underlying model** named by model slug (`[lfm3-1.7b]`, `[qwen3.5-4b]`, `[ornith-1.5-9b]`, etc.) with ONLY the core engine/hardware load physics (flash attention, KV cache quantisation, context size, batch/ubatch size, parallelism, and speculative decoding).
 
-## Model Catalog
+## Model Catalog & Backend Mapping
 
-Canonical models exposed directly without `-*` suffixes:
-- General / Chat: `chat`
-- Coding: `code`, `fim`
-- Reasoning: `reason`, `reason-fast`, `reason-low`, `reason-low-mtp`
-- Structured & Utility: `utility`, `decision`
-- Multimodal: `vision`, `ocr`
-- Search & Audio: `embed`, `rerank`, `asr`, `asr-ab-test`
+| Role Alias (LiteLLM) | Backend Section (`models.ini`) | Underlying GGUF |
+| :--- | :--- | :--- |
+| `chat` | `[gemma-4-e4b]` | `unsloth/gemma-4-E4B-it-GGUF:IQ4_XS` |
+| `fim` | `[qwen2.5-coder-3b]` | `Qwen/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M` |
+| `code` | `[spark-x2.6-4b]` | `bartowski/Spark-X2.6-4B-GGUF:Q5_K_M` |
+| `reason` | `[ornith-1.5-9b]` | `protoLabsAI/Ornith-1.5-9B-MTP-GGUF:IQ4_XS` |
+| `reason-fast`, `utility` | `[lfm3-1.7b]` | `LiquidAI/LFM3-1.7B-GGUF:QAD-Q4_0` |
+| `reason-low`, `reason-low-mtp` | `[qwen3.5-4b]` | `unsloth/Qwen3.5-4B-MTP-GGUF:UD-Q4_K_XL` |
+| `vision` | `[lfm3-vl-2b]` | `LiquidAI/LFM3-VL-2B-GGUF:QAD-Q4_0` |
+| `ocr` | `[paddleocr-vl-1.6]` | `PaddlePaddle/PaddleOCR-VL-1.6-GGUF:Q8_0` |
+| `decision` | `[kev-0.8b]` | `ggml-org/Kev-0.8B-GGUF:Q8_0` |
+| `embed` | `[embeddinggemma-2]` | `ggml-org/embeddinggemma-2-GGUF:Q8_0` |
+| `rerank` | `[qwen3-reranker-0.6b]` | `mradermacher/Qwen3-Reranker-0.6B-GGUF:Q8_0` |
+| `asr` | `[qwen3-asr-0.6b]` | `ggml-org/Qwen3-ASR-0.6B-GGUF:Q8_0` |
+| `asr-ab-test` | `[parakeet-unified-en-0.6b]` | `handy-computer/parakeet-unified-en-0.6b-gguf:Q5_K_M` |
 
 ## Layout
 
 | File | Role |
 | --- | --- |
-| `make_litellm_config.py` | Reads `models.ini`, emits the LiteLLM `model_list`: base passthrough aliases + the six-rung ladder per family targeting `openai/{family}` with `extra_body` |
+| `make_litellm_config.py` | Reads `models.ini`, emits the LiteLLM `model_list` mapping role aliases (`utility`, `reason-fast`, etc.) to their canonical `openai/{model-slug}` backend with per-role sampling and reasoning params |
 | `entrypoint.sh` | Starts the router (`--models-preset`, `--models-max 1`), waits for `/health`, then shepherds LiteLLM in front |
 | root `Dockerfile` / `docker-compose.yml` | Vulkan passthrough image (`/dev/dri` + RADV), latest llama.cpp Ubuntu x64 release binary |
 
