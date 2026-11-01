@@ -26,7 +26,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 # Add agents/jules-mcp to path if run directly
 parent_dir = str(Path(__file__).resolve().parent)
@@ -35,13 +34,11 @@ if parent_dir not in sys.path:
 
 try:
     from . import jules_client as jules
-    from . import prompts
     from .handlers import _describe_activity, _session_summary
     from .jules_client import JulesClient, JulesError
     from .prompts import get_prompt, list_prompts
 except ImportError:
     import jules_client as jules
-    import prompts
     from handlers import _describe_activity, _session_summary
     from jules_client import JulesClient, JulesError
     from prompts import get_prompt, list_prompts
@@ -460,8 +457,8 @@ def _add_sources_commands(subparsers: argparse._SubParsersAction) -> None:
     p_source.add_argument("--json", action="store_true")
 
 
-def _add_session_commands(subparsers: argparse._SubParsersAction) -> None:
-    """Register session-related subcommands."""
+def _add_session_query_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Register query and status subcommands for sessions."""
     # sessions
     p_sessions = subparsers.add_parser("sessions", help="List Jules task sessions")
     p_sessions.add_argument("--page-size", type=int, default=20)
@@ -476,6 +473,23 @@ def _add_session_commands(subparsers: argparse._SubParsersAction) -> None:
     p_session.add_argument("session_id", help="Jules session ID")
     p_session.add_argument("--json", action="store_true")
 
+    # status
+    p_status = subparsers.add_parser("status", help="Inspect session status, gate alerts, and activity timeline")
+    p_status.add_argument("session_id", help="Jules session ID")
+    p_status.add_argument("--activity-limit", type=int, default=10, help="Number of recent activities to show")
+    p_status.add_argument("--json", action="store_true")
+
+    # audit
+    p_audit = subparsers.add_parser("audit", help="Audit sessions for stalled runners and deliverables")
+    p_audit.add_argument("--max-age-days", "--days", type=int, default=30, dest="max_age_days")
+    p_audit.add_argument("--stale-threshold-mins", type=int, default=60)
+    p_audit.add_argument("--repo", default=None)
+    p_audit.add_argument("--all-pages", action="store_true")
+    p_audit.add_argument("--json", action="store_true")
+
+
+def _add_session_lifecycle_commands(subparsers: argparse._SubParsersAction) -> None:
+    """Register lifecycle and task control subcommands for sessions."""
     # start / create-session
     for cmd_name in ("start", "create-session"):
         p_start = subparsers.add_parser(cmd_name, help="Start a new Jules task session")
@@ -493,12 +507,6 @@ def _add_session_commands(subparsers: argparse._SubParsersAction) -> None:
         p_send.add_argument("session_id", help="Target session ID")
         p_send.add_argument("message", help="Instruction or feedback text")
 
-    # status
-    p_status = subparsers.add_parser("status", help="Inspect session status, gate alerts, and activity timeline")
-    p_status.add_argument("session_id", help="Jules session ID")
-    p_status.add_argument("--activity-limit", type=int, default=10, help="Number of recent activities to show")
-    p_status.add_argument("--json", action="store_true")
-
     # approve-plan
     p_approve = subparsers.add_parser("approve-plan", help="Approve a pending implementation plan")
     p_approve.add_argument("session_id", help="Target session ID")
@@ -514,14 +522,6 @@ def _add_session_commands(subparsers: argparse._SubParsersAction) -> None:
         choices=["progress_check", "plan_stalled", "pr_reminder"],
         help="Nudge template (default: progress_check)",
     )
-
-    # audit
-    p_audit = subparsers.add_parser("audit", help="Audit sessions for stalled runners and deliverables")
-    p_audit.add_argument("--max-age-days", "--days", type=int, default=30, dest="max_age_days")
-    p_audit.add_argument("--stale-threshold-mins", type=int, default=60)
-    p_audit.add_argument("--repo", default=None)
-    p_audit.add_argument("--all-pages", action="store_true")
-    p_audit.add_argument("--json", action="store_true")
 
     # archive / archive-session
     for cmd_name in ("archive", "archive-session"):
@@ -589,7 +589,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="subcommand", title="Available Commands", required=True)
 
     _add_sources_commands(subparsers)
-    _add_session_commands(subparsers)
+    _add_session_query_commands(subparsers)
+    _add_session_lifecycle_commands(subparsers)
     _add_prompt_commands(subparsers)
     _add_mcp_and_utility_commands(subparsers)
 
