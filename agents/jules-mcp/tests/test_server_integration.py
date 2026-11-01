@@ -173,6 +173,18 @@ class TestFastAPIServerIntegration(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             mock_client_cls.assert_called_with(api_key="test-key-123")
 
+    def test_cors_disallows_untrusted_origin_by_default(self):
+        """Verify arbitrary origins do not receive permissive CORS headers with credentials."""
+        resp = self.client.options(
+            "/health",
+            headers={
+                "Origin": "https://malicious.example.com",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        self.assertNotIn("access-control-allow-origin", resp.headers)
+        self.assertNotIn("access-control-allow-credentials", resp.headers)
+
 
 if __name__ == "__main__":
     unittest.main()
