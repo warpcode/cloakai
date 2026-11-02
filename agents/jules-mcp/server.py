@@ -82,11 +82,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Security: Avoid overly permissive CORS with allow_credentials=True and wildcard origins.
+# Origins can be configured via CLOAKAI_CORS_ORIGINS (comma-separated list).
+_cors_origins_env = os.environ.get("CLOAKAI_CORS_ORIGINS", "").strip()
+_cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=bool(_cors_origins),
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
