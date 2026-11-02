@@ -68,6 +68,10 @@ class TestHandlers(unittest.TestCase):
         }
         self.assertTrue(expected.issubset(tool_names))
 
+        # Assert cached response reference identity and consistency across multiple calls
+        res2 = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertIs(res.result["tools"], res2.result["tools"])
+
     def test_call_tool_jules_send(self):
         self.mock_client.send_message.return_value = {}
         req = JSONRPCRequest(
@@ -202,6 +206,10 @@ class TestHandlers(unittest.TestCase):
         names = {p["name"] for p in prompts}
         self.assertIn("jules_agent_bolt", names)
         self.assertIn("jules_task_scaffold", names)
+
+        # Assert cached response reference identity and consistency across multiple calls
+        res2 = asyncio.run(handle_jsonrpc(req, self.mock_client))
+        self.assertIs(res.result["prompts"], res2.result["prompts"])
 
     def test_prompts_get(self):
         req = JSONRPCRequest(
