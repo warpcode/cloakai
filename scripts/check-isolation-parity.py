@@ -69,7 +69,7 @@ def declared_flags(spec: dict) -> list[str]:
     if isolation.get("read_only"):
         flags.append("--read-only")
     for mount in isolation.get("tmpfs", []):
-        flags += ["--tmpfs", str(mount)]
+        flags.extend(["--tmpfs", str(mount)])
     for cap in isolation.get("cap_drop", []):
         flags.append(f"--cap-drop={cap}")
     if isolation.get("no_new_privileges"):
