@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from handlers import HANDLERS, TOOLS, handle_jsonrpc
-from jules_client import AsyncJulesClient, JulesError
+from jules_client import AsyncJulesClient, JulesClient, JulesError
 from protocol import (
     INTERNAL_ERROR,
     INVALID_PARAMS,
@@ -249,6 +249,29 @@ class TestHandlers(unittest.TestCase):
         res = asyncio.run(handle_jsonrpc(req, self.mock_client))
         self.assertEqual(res.id, 9)
         self.assertEqual(res.error.code, METHOD_NOT_FOUND)
+
+    def test_call_endpoint_security_path_traversal_and_ssrf(self):
+        client = AsyncJulesClient(api_key="test-key")
+        malicious_endpoints = [
+            "https://evil.com/leak",
+            "http://evil.com/leak",
+            "//evil.com/leak",
+            "javascript:alert(1)",
+            "data:text/plain,foo",
+            "../../other",
+            "sessions/../../../other",
+            "/v1alpha/../../other",
+        ]
+        for ep in malicious_endpoints:
+            with self.subTest(endpoint=ep):
+                with self.assertRaises(JulesError):
+                    asyncio.run(client.call("GET", ep))
+
+        sync_client = JulesClient(api_key="test-key")
+        for ep in malicious_endpoints:
+            with self.subTest(endpoint=ep, client="sync"):
+                with self.assertRaises(JulesError):
+                    sync_client.call("GET", ep)
 
 
 if __name__ == "__main__":

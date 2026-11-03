@@ -11,6 +11,7 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import os
+import posixpath
 import re
 from typing import Any
 import urllib.error
@@ -77,6 +78,24 @@ def parse_iso_datetime(iso_str: str) -> datetime:
     return dt
 
 
+def _build_and_validate_url(endpoint: str, base_url: str = BASE) -> str:
+    """Validate endpoint relativity and path boundary to prevent SSRF and path traversal."""
+    parsed = urllib.parse.urlsplit(endpoint.strip())
+    # Security: Reject non-relative schemes or protocol-relative/network-path references (SSRF risk)
+    if parsed.scheme or parsed.netloc:
+        raise JulesError("API endpoint must be relative to the configured Jules URL.")
+
+    clean_endpoint = endpoint.strip().lstrip("/")
+    url = f"{base_url.rstrip('/')}/{clean_endpoint}"
+
+    # Security: Ensure path does not escape the base URL path via path traversal (e.g. '../..')
+    norm_path = posixpath.normpath(urllib.parse.urlsplit(url).path)
+    base_path = posixpath.normpath(urllib.parse.urlsplit(base_url).path)
+    if not (norm_path == base_path or norm_path.startswith(base_path + "/")):
+        raise JulesError("API endpoint must not escape the configured base API path.")
+    return url
+
+
 def call(
     method: str,
     endpoint: str,
@@ -87,14 +106,10 @@ def call(
 ) -> dict:
     """Execute a restricted REST call relative to the v1alpha endpoint.
 
-    Absolute URLs are rejected to guarantee the API key cannot be leaked to another host.
+    Absolute URLs and path traversal attempts are rejected to guarantee the API key cannot be leaked.
     Google's response body is surfaced in errors; the request itself is never surfaced.
     """
-    if endpoint.startswith(("http://", "https://", "//")):
-        raise JulesError("API endpoint must be relative to the configured Jules URL.")
-
-    clean_endpoint = endpoint.strip().lstrip("/")
-    url = f"{base_url.rstrip('/')}/{clean_endpoint}"
+    url = _build_and_validate_url(endpoint, base_url=base_url)
 
     if query_params:
         filtered = {k: v for k, v in query_params.items() if v is not None and v != ""}
@@ -1255,8 +1270,7 @@ class AsyncJulesClient:
         payload: dict | None = None,
         query_params: dict | None = None,
     ) -> dict:
-        if endpoint.startswith(("http://", "https://", "//")):
-            raise JulesError("API endpoint must be relative to the configured Jules URL.")
+        url = _build_and_validate_url(endpoint, base_url=self.base_url)
 
         try:
             import httpx  # type: ignore
@@ -1266,8 +1280,6 @@ class AsyncJulesClient:
                 self._owned_http_client = True
 
             if isinstance(self._http_client, httpx.AsyncClient):
-                clean_endpoint = endpoint.strip().lstrip("/")
-                url = f"{self.base_url}/{clean_endpoint}"
                 filtered = {k: v for k, v in (query_params or {}).items() if v is not None and v != ""}
                 headers = {
                     "X-Goog-Api-Key": self.api_key(),
