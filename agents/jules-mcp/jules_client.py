@@ -90,8 +90,11 @@ def _build_and_validate_url(endpoint: str, base_url: str = BASE) -> str:
 
     # Security: Ensure path does not escape the base URL path via path traversal (e.g. '../..')
     norm_path = posixpath.normpath(urllib.parse.urlsplit(url).path)
-    base_path = posixpath.normpath(urllib.parse.urlsplit(base_url).path)
-    if not (norm_path == base_path or norm_path.startswith(base_path + "/")):
+    base_path = posixpath.normpath(urllib.parse.urlsplit(base_url).path or "/")
+    if base_path == "/":
+        if not norm_path.startswith("/"):
+            raise JulesError("API endpoint must not escape the configured base API path.")
+    elif not (norm_path == base_path or norm_path.startswith(base_path + "/")):
         raise JulesError("API endpoint must not escape the configured base API path.")
     return url
 

@@ -273,6 +273,13 @@ class TestHandlers(unittest.TestCase):
                 with self.assertRaises(JulesError):
                     sync_client.call("GET", ep)
 
+    def test_call_endpoint_root_base_url_compatibility(self):
+        # Base URLs with empty or root paths should allow valid endpoints without error
+        from jules_client import _build_and_validate_url
+        for base in ["http://localhost:8080", "http://localhost:8080/", "https://proxy.internal"]:
+            url = _build_and_validate_url("sessions/123", base_url=base)
+            self.assertEqual(url, f"{base.rstrip('/')}/sessions/123")
+
 
 if __name__ == "__main__":
     unittest.main()
