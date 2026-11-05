@@ -261,6 +261,12 @@ class TestHandlers(unittest.TestCase):
             "../../other",
             "sessions/../../../other",
             "/v1alpha/../../other",
+            # URL-encoded path traversal sequences
+            "%2e%2e/%2e%2e/other",
+            "sessions/%2e%2e/%2e%2e/other",
+            "sessions%2f..%2f..%2fother",
+            "sessions/%2E%2E/%2E%2E/other",
+            "%2e%2e%2f%2e%2e%2fother",
         ]
         for ep in malicious_endpoints:
             with self.subTest(endpoint=ep):
