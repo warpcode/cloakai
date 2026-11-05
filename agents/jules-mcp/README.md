@@ -272,8 +272,8 @@ uv run --with fastapi --with pydantic --with httpx --with pytest pytest agents/j
 ```
 
 - `test_prompts.py`: 12 tests verifying prompt registration, parameter injection, and persona output contracts.
-- `test_cli.py`: 15 tests verifying CLI commands, flags, safety gates (`--confirm`), `prompts`, `prompt`, and `mcp` dispatch.
-- `test_verdict.py`: 11 tests covering timeline parsing, plan gates, idle detection, and truncated timelines.
+- `test_cli.py`: 18 tests verifying CLI commands, flags, safety gates (`--confirm`), `prompts`, `prompt`, and `mcp` dispatch.
+- `test_verdict.py`: 42 tests covering timeline parsing, plan gates, idle detection, and truncated timelines.
 - `test_protocol.py`: 8 tests validating JSON-RPC formatting and Pydantic input schemas.
-- `test_handlers.py`: 12 tests verifying tool and prompt execution, argument binding, and error mapping.
-- `test_server_integration.py`: 13 tests covering `/mcp`, `/health`, `/tools`, `/prompts`, `/prompts/{name}`, and header authentication.
+- `test_handlers.py`: 16 tests verifying tool and prompt execution, argument binding, and error mapping.
+- `test_server_integration.py`: 14 tests covering `/mcp`, `/health`, `/tools`, `/prompts`, `/prompts/{name}`, and header authentication.
