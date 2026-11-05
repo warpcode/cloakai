@@ -287,29 +287,13 @@ What this phase does buy you: the isolation flags live in one versioned file ins
 shell history, every client gets its tools from a generated stdio entry, and both images are usable
 with no service running.
 
-### The dev stack
+### Verifying isolation parity
 
-```bash
-./scripts/dev.sh up       # bring everything up, WAIT for health, print state
-./scripts/dev.sh logs     # tail it
-./scripts/dev.sh shell    # exec into the agent container
-./scripts/dev.sh test     # isolation parity + the full isolation suite
-./scripts/dev.sh down     # tear down
-```
-
-`up` gates on health rather than firing and forgetting — a stack that takes 30 seconds to become
-usable and says nothing is how ordering bugs stay invisible.
-
-`dev-agent` publishes **no ports**. It is reachable as `dev-agent:8081` from `internal` and from
-nowhere else. If you need to poke at it, publish to `127.0.0.1` and remove it afterwards.
-
-### Two ways to run the agent, and they cannot drift
-
-`agents/isolation-flags` is the source of truth for `docker run`. Compose cannot read a file, so
-`scripts/check-isolation-parity.sh` fails if the generated catalogue and this file
-disagree, and `scripts/dev.sh test` runs it. Without that guard, a change to one could leave the
-spawned agent — the one a client actually runs — quietly less isolated than the
-one you tested.
+`agents/isolation-flags` is the source of truth for `docker run`.
+`./scripts/check-isolation-parity.sh` verifies that the generated catalogue (`dist/agents.json`)
+and `agents/isolation-flags` agree, and `./scripts/isolation-tests.sh` (or `./scripts/test.sh`) runs the
+isolation test suite. Without that guard, a change to one could leave the spawned agent — the one
+a client actually runs — quietly less isolated than the one you tested.
 
 ### The isolation flags live in one file
 
@@ -333,7 +317,7 @@ compiler/cloakai_compiler/
 ├── strategies.py                         one per output shape, dispatched from the table
 ├── compile.py                            the four rules
 ├── validate.py                           every lint check; all fail loudly
-└── tests/                                64 tests
+└── tests/                                67 tests
 
 agents/                                   the container
 ├── dev.Dockerfile                        code review and release notes
