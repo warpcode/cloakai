@@ -131,7 +131,7 @@ jules start "Refactor auth middleware to use JWT" --source github/owner/repo --b
 jules approve-plan 1234567890
 
 # Nudge an idle session runner
-jules nudge 1234567890 --template progress_check
+jules nudge 1234567890 progress_check
 
 # Extract git diff patches from session deliverables
 jules patch 1234567890
