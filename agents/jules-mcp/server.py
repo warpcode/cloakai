@@ -23,27 +23,39 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 try:
     from . import jules_client as jules
-    from .handlers import HANDLERS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, TOOLS, handle_jsonrpc
-    from .jules_client import AsyncJulesClient, JulesError
-    from .prompts import get_prompt, list_prompts
+    from .handlers import (
+        PROTOCOL_VERSION,
+        SERVER_NAME,
+        SERVER_VERSION,
+        TOOLS,
+        get_cached_prompts_list,
+        get_cached_tools_list,
+        handle_jsonrpc,
+    )
+    from .jules_client import AsyncJulesClient
+    from .prompts import PROMPTS, get_prompt
     from .protocol import (
-        INTERNAL_ERROR,
         INVALID_REQUEST,
         PARSE_ERROR,
-        JSONRPCError,
         JSONRPCRequest,
         JSONRPCResponse,
     )
 except ImportError:
     import jules_client as jules
-    from handlers import HANDLERS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION, TOOLS, handle_jsonrpc
-    from jules_client import AsyncJulesClient, JulesError
-    from prompts import get_prompt, list_prompts
+    from handlers import (
+        PROTOCOL_VERSION,
+        SERVER_NAME,
+        SERVER_VERSION,
+        TOOLS,
+        get_cached_prompts_list,
+        get_cached_tools_list,
+        handle_jsonrpc,
+    )
+    from jules_client import AsyncJulesClient
+    from prompts import PROMPTS, get_prompt
     from protocol import (
-        INTERNAL_ERROR,
         INVALID_REQUEST,
         PARSE_ERROR,
-        JSONRPCError,
         JSONRPCRequest,
         JSONRPCResponse,
     )
@@ -119,6 +131,8 @@ def get_jules_client(
 async def health() -> dict[str, Any]:
     """Healthcheck endpoint for container orchestration and uptime monitoring."""
     key_ready = jules.api_key_present()
+    # Performance optimization: access len(PROMPTS) directly to avoid allocating a list of
+    # Prompt instances on every health check probe.
     return {
         "status": "healthy",
         "server": SERVER_NAME,
@@ -126,23 +140,27 @@ async def health() -> dict[str, Any]:
         "protocol_version": PROTOCOL_VERSION,
         "api_key_configured": key_ready,
         "tool_count": len(TOOLS),
-        "prompt_count": len(list_prompts()),
+        "prompt_count": len(PROMPTS),
     }
 
 
 @app.get("/tools", summary="List exposed MCP tools")
 async def list_tools() -> dict[str, Any]:
     """RESTful tool catalogue inspection."""
+    # Performance optimization: reuse pre-serialized tools list cache to eliminate
+    # redundant Pydantic model_dump traversals across all 15 tools on every GET request.
     return {
-        "tools": [t.model_dump(by_alias=True) for t in TOOLS.values()]
+        "tools": get_cached_tools_list()
     }
 
 
 @app.get("/prompts", summary="List exposed MCP prompts")
 async def list_prompts_endpoint() -> dict[str, Any]:
     """RESTful prompt catalogue inspection."""
+    # Performance optimization: reuse pre-serialized prompts list cache to eliminate
+    # redundant Pydantic model_dump traversals across all 10 prompts on every GET request.
     return {
-        "prompts": [p.model_dump(by_alias=True) for p in list_prompts()]
+        "prompts": get_cached_prompts_list()
     }
 
 

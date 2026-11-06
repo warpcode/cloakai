@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import sys
 import unittest
@@ -13,7 +12,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from server import app
-import jules_client as jules
+from handlers import get_cached_tools_list, get_cached_prompts_list
+from prompts import PROMPTS
 
 
 class TestFastAPIServerIntegration(unittest.TestCase):
@@ -40,16 +40,18 @@ class TestFastAPIServerIntegration(unittest.TestCase):
         self.assertIn("jules_status", names)
         self.assertIn("jules_sources", names)
         self.assertIn("jules_nudge", names)
+        self.assertEqual(data["tools"], get_cached_tools_list())
 
     def test_prompts_catalogue_endpoint(self):
         resp = self.client.get("/prompts")
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertIn("prompts", data)
-        self.assertEqual(len(data["prompts"]), 10)
+        self.assertEqual(len(data["prompts"]), len(PROMPTS))
         names = {p["name"] for p in data["prompts"]}
         self.assertIn("jules_task_scaffold", names)
         self.assertIn("jules_agent_bolt", names)
+        self.assertEqual(data["prompts"], get_cached_prompts_list())
 
     def test_prompts_render_endpoint(self):
         resp = self.client.post("/prompts/jules_agent_bolt", json={"focus_slice": "core/hotpath.py"})
