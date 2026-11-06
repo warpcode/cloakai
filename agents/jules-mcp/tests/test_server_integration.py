@@ -185,6 +185,19 @@ class TestFastAPIServerIntegration(unittest.TestCase):
         self.assertNotIn("access-control-allow-origin", resp.headers)
         self.assertNotIn("access-control-allow-credentials", resp.headers)
 
+    def test_security_headers_present(self):
+        """Verify standard security headers are attached to HTTP responses."""
+        resp = self.client.get("/health")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.headers.get("x-content-type-options"), "nosniff")
+        self.assertEqual(resp.headers.get("x-frame-options"), "DENY")
+        self.assertEqual(
+            resp.headers.get("content-security-policy"),
+            "default-src 'none'; frame-ancestors 'none'",
+        )
+        self.assertEqual(resp.headers.get("referrer-policy"), "no-referrer")
+        self.assertIn("max-age=31536000", resp.headers.get("strict-transport-security", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
