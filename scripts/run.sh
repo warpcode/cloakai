@@ -25,6 +25,13 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$WORKSPACE" ] || WORKSPACE="${CLOAKAI_PROJECT:-}"
 
+if [ -n "$WORKSPACE" ]; then
+  case "$WORKSPACE" in
+    /*) ;;
+    *) WORKSPACE="$PWD/$WORKSPACE" ;;
+  esac
+fi
+
 # The caller's directory must be captured BEFORE we cd to the repo root.
 # Doing it afterwards made PROJECT_DIR resolve to the cloakai checkout itself, so
 # running this from any other project silently mounted cloakai's own source into
