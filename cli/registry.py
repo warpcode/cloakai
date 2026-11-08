@@ -166,10 +166,10 @@ def build_argv(
 
     Two shapes, one difference:
 
-      agents   adds --rm, and the prompt as the final argument.
-      mcp      adds -i and omits --rm only because the entrypoint serves stdio
-               until stdin closes; the container still goes on exit. -i is what
-               keeps that pipe open.
+      agents   adds the prompt as the final argument.
+      mcp      adds -i. The entrypoint serves stdio until stdin closes;
+               the container still goes on exit. -i is what keeps that
+               pipe open. Both shapes use --rm.
     """
     if shape not in SHAPES:
         raise CliError(f"unknown shape '{shape}'; expected one of {', '.join(SHAPES)}")
