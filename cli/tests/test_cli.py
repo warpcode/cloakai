@@ -252,8 +252,8 @@ class PromptSafety(unittest.TestCase):
             extra = {"CUSTOM_VAR": "secret_val"}
             line = reg.build_argv(ONE, "dev", shape, prompt="test prompt", extra_env=extra)
             image_at = line.index(SPEC["image"])
-            self.assertIn("CUSTOM_VAR=secret_val", line)
-            env_val_at = line.index("CUSTOM_VAR=secret_val")
+            self.assertIn("CUSTOM_VAR", line)
+            env_val_at = line.index("CUSTOM_VAR")
             self.assertLess(
                 env_val_at, image_at,
                 f"For {shape}, --env flag must come before image at index {image_at}; got index {env_val_at} in {line}"

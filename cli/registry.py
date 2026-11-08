@@ -141,11 +141,8 @@ def build_env(
             value = value.replace(token, actual)
         out += ["--env", f"{var}={value}"]
     if extra_env:
-        for var, value in sorted(extra_env.items()):
-            if value is not None:
-                out += ["--env", f"{var}={value}"]
-            else:
-                out += ["--env", var]
+        for var in sorted(extra_env.keys()):
+            out += ["--env", var]
     return out
 
 
@@ -262,7 +259,10 @@ def run_agents(
     get(doc, name)
     argv = build_argv(doc, name, "agents", prompt=prompt, extra_env=env)
     try:
-        done = subprocess.run(argv, check=False, timeout=timeout)
+        spawn_env = os.environ.copy()
+        if env:
+            spawn_env.update(env)
+        done = subprocess.run(argv, check=False, timeout=timeout, env=spawn_env)
         return done.returncode
     except subprocess.TimeoutExpired:
         # The container is --rm, so it goes when this process does.
@@ -283,7 +283,10 @@ def run_mcp(doc: dict[str, Any], name: str, *, env: dict[str, str] | None = None
     """
     get(doc, name)
     argv = build_argv(doc, name, "mcp", extra_env=env)
-    os.execvp("docker", argv)
+    spawn_env = os.environ.copy()
+    if env:
+        spawn_env.update(env)
+    os.execvpe("docker", argv, spawn_env)
     return 127  # only reached if execvp fails
 
 # ---------------------------------------------------------------- doctor probes
