@@ -27,7 +27,6 @@ import argparse
 import os
 import shutil
 import sys
-from pathlib import Path
 
 from . import registry as reg
 
@@ -91,6 +90,43 @@ def _cmd_show(args: argparse.Namespace) -> int:
     import json
     doc = reg.load(args.catalog)
     print(json.dumps(reg.get(doc, args.name), indent=2, sort_keys=True))
+    return EXIT_OK
+
+
+def _cmd_status(args: argparse.Namespace) -> int:
+    """List active cloakai containers."""
+    if shutil.which("docker") is None:
+        print("error: docker is not installed or not on PATH", file=sys.stderr)
+        return EXIT_FAILED
+
+    import subprocess
+    try:
+        result = subprocess.run(
+            [
+                "docker", "ps",
+                "--filter", "label=cloakai.call=1",
+                "--format", '{{.ID}}\t{{.Label "cloakai.instance"}}\t{{.RunningFor}}\t{{.Status}}'
+            ],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"error: docker ps failed: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    lines = [line for line in result.stdout.strip().split("\n") if line]
+    if not lines:
+        print("No active agents.")
+        return EXIT_OK
+
+    print(f"{'CONTAINER ID':<15} {'AGENT':<15} {'UPTIME':<15} {'STATUS'}")
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) >= 4:
+            cid, agent, uptime, status = parts[0], parts[1], parts[2], parts[3]
+            agent = agent or "<unknown>"
+            print(f"{cid:<15} {agent:<15} {uptime:<15} {status}")
     return EXIT_OK
 
 
@@ -192,6 +228,9 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show", help="print one agent's catalogue entry as JSON")
     show.add_argument("name")
     show.set_defaults(func=_cmd_show)
+
+    status = sub.add_parser("status", aliases=["ps"], help="list active agent containers")
+    status.set_defaults(func=_cmd_status)
 
     doctor = sub.add_parser("doctor", help="check that everything needed is present")
     doctor.set_defaults(func=_cmd_doctor)
