@@ -173,6 +173,8 @@ def check_server_entry(entry: Any, where: str) -> None:
         if not COMMAND_RE.match(command) and not command.startswith("./"):
             _fail(where, f"'command' {command!r} must be a bare executable name or a "
                          f"'./'-prefixed plugin-relative path")
+        if command.startswith("./") and ".." in command.split("/"):
+            _fail(where, f"'command' {command!r} must not contain '..' path traversal segments")
         if "args" in entry:
             if not isinstance(entry["args"], list) or not all(isinstance(a, str) for a in entry["args"]):
                 _fail(where, "'args' must be an array of strings")
@@ -187,9 +189,13 @@ def check_server_entry(entry: Any, where: str) -> None:
                     _fail(where, f"env key {k!r} is invalid: must match {ENV_NAME_RE.pattern}")
                 if not isinstance(v, str):
                     _fail(where, f"env.{k} must be a string")
-        if "cwd" in entry and not CWD_RE.match(entry["cwd"]):
-            _fail(where, f"'cwd' {entry['cwd']!r} must be './'-relative, ${{PLUGIN_ROOT}}-rooted, "
-                         f"or ${{PLUGIN_DATA}}-rooted")
+        if "cwd" in entry:
+            cwd = entry["cwd"]
+            if not CWD_RE.match(cwd):
+                _fail(where, f"'cwd' {cwd!r} must be './'-relative, ${{PLUGIN_ROOT}}-rooted, "
+                             f"or ${{PLUGIN_DATA}}-rooted")
+            if ".." in cwd.split("/"):
+                _fail(where, f"'cwd' {cwd!r} must not contain '..' path traversal segments")
     else:
         url = entry.get("url")
         if not isinstance(url, str) or not url.strip():
