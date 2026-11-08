@@ -11,6 +11,9 @@ Exits non-zero on any failure.
 
 import importlib.util
 import sys
+import io
+import contextlib
+from unittest import mock
 import time
 from pathlib import Path
 
@@ -76,7 +79,7 @@ def main() -> int:
 
     section("a sweep must spare a LIVE call, even another instance's")
     young_other = make(age=0.0, instance="peer-A")
-    reaped = reaper.sweep(MAX_LIFETIME)
+    scanned, reaped = reaper.sweep(MAX_LIFETIME)
     if alive(young_other):
         ok("a fresh call from another instance was NOT reaped")
     else:
@@ -85,7 +88,7 @@ def main() -> int:
 
     section("a sweep must reap a HUNG call")
     hung = make(age=MAX_LIFETIME + 3, instance="self")
-    reaped = reaper.sweep(MAX_LIFETIME)
+    scanned, reaped = reaper.sweep(MAX_LIFETIME)
     if not alive(hung):
         ok("a call past its lifetime was reaped")
     else:
@@ -102,7 +105,7 @@ def main() -> int:
     foreign = out.strip()
     reaper.docker("start", foreign, check=False)
     created.append(foreign)
-    reaper.sweep(MAX_LIFETIME)
+    scanned, reaped = reaper.sweep(MAX_LIFETIME)
     if alive(foreign):
         ok("an UNLABELLED container was left alone (no label, no kill)")
     else:
@@ -117,7 +120,7 @@ def main() -> int:
     weird = out.strip()
     reaper.docker("start", weird, check=False)
     created.append(weird)
-    reaper.sweep(MAX_LIFETIME)
+    scanned, reaped = reaper.sweep(MAX_LIFETIME)
     if alive(weird):
         ok("a container whose age cannot be determined was spared, not killed on a guess")
     else:
@@ -126,7 +129,7 @@ def main() -> int:
 
     section("a dry run reports without killing")
     probe = make(age=MAX_LIFETIME + 3, instance="self")
-    reaper.sweep(MAX_LIFETIME, dry_run=True)
+    scanned, reaped = reaper.sweep(MAX_LIFETIME, dry_run=True)
     if alive(probe):
         ok("--dry-run reaped nothing")
     else:
@@ -169,11 +172,44 @@ def main() -> int:
         bad(f"--dry-run was noisy with nothing to reap: {err2.getvalue().strip()[:80]!r}")
 
     section("sweeping an empty system is a no-op, not an error")
-    reaped = reaper.sweep(MAX_LIFETIME)
+    scanned, reaped = reaper.sweep(MAX_LIFETIME)
     if reaped == []:
         ok("no containers to reap is reported as an empty list")
     else:
         bad(f"expected nothing to reap, got {reaped}")
+
+    section("JSON output")
+    import json
+    argv = ["cloakai-reap.py", "--once", "--json", "--max-lifetime", str(MAX_LIFETIME)]
+    out_buf = io.StringIO()
+    try:
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(out_buf):
+            reaper.main()
+        res = json.loads(out_buf.getvalue())
+        if "scanned" in res and "reaped" in res and isinstance(res["scanned"], int) and isinstance(res["reaped"], list):
+            ok("--json on empty outputs correct JSON structure")
+        else:
+            bad(f"--json on empty output invalid structure: {res}")
+    except BaseException as e:
+        bad(f"--json output failed on empty: {e}")
+    finally:
+        cleanup()
+
+    planted = make(age=MAX_LIFETIME + 3, instance="json-probe")
+    argv = ["cloakai-reap.py", "--once", "--json", "--max-lifetime", str(MAX_LIFETIME)]
+    out_buf = io.StringIO()
+    try:
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(out_buf):
+            reaper.main()
+        res = json.loads(out_buf.getvalue())
+        if res["scanned"] > 0 and len(res["reaped"]) > 0 and res["reaped"][0]["instance"] == "json-probe":
+            ok("--json on populated system outputs correct JSON structure with reaped data")
+        else:
+            bad(f"--json on populated output invalid structure/data: {res}")
+    except BaseException as e:
+        bad(f"--json output failed on populated: {e}")
+    finally:
+        cleanup()
 
     print()
     if failures:
