@@ -96,6 +96,23 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Defense-in-depth: Attach standard security headers to all HTTP responses."""
+    response = await call_next(request)
+    # Prevent browsers from MIME-sniffing away from declared Content-Type
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Defend against clickjacking by refusing framing
+    response.headers["X-Frame-Options"] = "DENY"
+    # Restrict resource loading and embedding
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    # Prevent referrer leakage across requests
+    response.headers["Referrer-Policy"] = "no-referrer"
+    # Enforce secure HTTPS transport
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 def get_jules_client(
     x_goog_api_key: str | None = Header(default=None, alias="X-Goog-Api-Key"),
     authorization: str | None = Header(default=None, alias="Authorization"),
