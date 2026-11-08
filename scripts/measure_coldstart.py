@@ -115,12 +115,13 @@ def main():
     # since layers are already on disk".
     create_only = []
     for _ in range(REPS):
+        t0 = time.perf_counter()
         rc, cid = sh(["docker", "create", *RUN_FLAGS, IMAGE, *PAYLOAD])
+        dt_create = time.perf_counter() - t0
         if rc == 0:
-            t0 = time.perf_counter()
             sh(["docker", "rm", "-f", cid])
-            create_only.append(time.perf_counter() - t0)
-    out["create_only"] = report("docker create (+rm)", create_only)
+            create_only.append(dt_create)
+    out["create_only"] = report("docker create", create_only)
     out["start"] = report("docker start", starts)
     out["create_start"] = report("create+start+rm", totals)
 

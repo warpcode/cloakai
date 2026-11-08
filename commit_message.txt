@@ -1,0 +1,19 @@
+🐛 Bug Hunter: fix docker create timing measurement
+
+Problem:
+The `scripts/measure_coldstart.py` script attempts to measure the execution time of `docker create` alone to support the claim that creating a container is cheap. However, the timing logic initialized `t0 = time.perf_counter()` after the `sh(["docker", "create"...])` call and immediately before `sh(["docker", "rm"...])`. As a result, it actually measured the time taken by `docker rm`, completely missing the `create` step it intended to measure.
+
+Change:
+Shifted the timing instrumentation `t0 = time.perf_counter()` to immediately precede the `sh(["docker", "create"...])` command, and calculated the delta before the cleanup `rm` is called. Added a focused unit test `scripts/test_measure_coldstart_unit.py` that mocks the `sh` commands with predictable delays to assert that only the `create` time is measured.
+
+Verification:
+- Executed the newly added unit test via `PYTHONPATH=. python3 -m unittest scripts/test_measure_coldstart_unit.py`. It passes, asserting the measurement closely tracks the mock `create` time (0.1s) and excludes the `rm` time (0.05s).
+- Ran the full test suite (`./scripts/test.sh`) to ensure no regressions were introduced.
+
+Risk and rollback:
+Low risk. This only affects a benchmark script used for internal documentation, not production code. Reverting the commit restores the incorrect timing measurement.
+
+Confidence: High
+
+Dedupe check:
+Checked the repository git history (via `git log`) and the current codebase. No existing open/rejected PRs were visible or could be checked locally.
