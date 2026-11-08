@@ -124,14 +124,16 @@ def config_opencode(ctx) -> list[Path]:
 
     doc = {"$schema": "https://opencode.ai/config.json", "mcp": servers}
 
-    agent_cfg = {"description": ctx.agent.get("description", "")}
+    agent_cfg = {}
+    if ctx.agent.get("description"):
+        agent_cfg["description"] = ctx.agent["description"]
     if ctx.agent.get("mode"):
         agent_cfg["mode"] = ctx.agent["mode"]
     if ctx.agent.get("model"):
         agent_cfg["model"] = ctx.agent["model"]
     if ctx.agent.get("permission"):
         agent_cfg["permission"] = ctx.agent["permission"]
-    if agent_cfg["description"]:
+    if agent_cfg:
         doc["agent"] = {ctx.agent_name: agent_cfg}
 
     path = ctx.clients_root / "opencode.json"

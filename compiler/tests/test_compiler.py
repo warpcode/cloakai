@@ -225,6 +225,15 @@ class TestBuild(Sandbox):
         self.assertEqual(entry["command"][-1], "mcp")
         self.assertNotIn("url", entry)
 
+    def test_opencode_agent_config_no_description(self):
+        self.plugin.joinpath("io.github.warpcode.cloakai/agent.json").write_text(
+            '{"name": "test-agent", "model": "test-model"}'
+        )
+        self.compile()
+        doc = json.loads((self.cwd / "clients/opencode.json").read_text())
+        self.assertIn("agent", doc, "agent config should be present even without description")
+        self.assertEqual(doc["agent"]["test-agent"]["model"], "test-model")
+
     def test_no_absolute_host_paths(self):
         self.compile()
         for path in list((self.cwd / "dist").rglob("*")) + list((self.cwd / "clients").rglob("*")):
