@@ -9,7 +9,7 @@ The container that wraps the agent. Not the agent's configuration — that lives
 ```
 agents/
 ├── dev.Dockerfile              the image: two modes off one config
-├── cloakai-entrypoint.sh       run | mcp | shell
+├── cloakai-entrypoint.sh       run-cmd | mcp | mcp-http | shell
 ├── cloakai-healthcheck.sh      a real MCP probe for compose
 └── isolation-flags             THE flag set, shared by run.sh and the tests
 ```
@@ -20,11 +20,12 @@ Two modes off one image, so there is no per-mode image to maintain:
 
 | Mode | What it does |
 |---|---|
-| `run` | The harness CLI, with your project directory mounted. The daily path. |
-| `mcp` | `docker agent serve mcp` over HTTP, exposing the agent as one MCP tool. |
+| `run-cmd` | Runs the exact command agent.json declares. |
+| `mcp` | `docker agent serve mcp` over stdio. The portable contract. |
+| `mcp-http` | `docker agent serve mcp` over HTTP on port 8081. |
 | `shell` | A shell, for debugging. |
 
-`run` mode is what `./scripts/run.sh` uses. `mcp` mode is what a gateway would reach, and what
+`mcp` mode is what third-party MCP clients and the CLI spawn directly over stdio. `mcp-http` mode is what a networked caller reaches, and what
 `docker compose up` starts as a supervised service.
 
 ## `isolation-flags`
