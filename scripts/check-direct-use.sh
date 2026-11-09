@@ -10,19 +10,6 @@
 # green. So it runs here now.
 #
 # The dev image needs no credential to list tools, so this is unconditional.
-#
-# The Jules check is OPT-IN and there is deliberately no presence test for
-# JULES_API_KEY: the credential is supplied per invocation by the caller, and
-# nothing here inspects the variable. To include it:
-#
-#   RUN_JULES=1 JULES_API_KEY=$(cloakenv get "kp://...:Password") \
-#     ./scripts/check-direct-use.sh
-#
-# Prefer running the jules half through agents/jules-mcp/verify.py directly; it
-# needs the Docker socket and a key in the same invocation.
-#
-# The jules half here builds the probe image's dependency set by reusing it as an
-# MCP client, so RUN_JULES=1 also requires the key in THIS environment.
 set -uo pipefail
 
 # Anything this script starts goes away when it finishes, INCLUDING when it is
@@ -78,28 +65,6 @@ if grep -q "PASS: the image is a working MCP server" <<<"$out"; then
 else
   no "cloakai/dev:mcp did not serve over stdio"
   tail -12 <<<"$out" | sed 's/^/       /'
-fi
-
-# ---------------------------------------------------------------- jules image
-echo "  jules image over stdio, no gateway"
-if [ "${RUN_JULES:-0}" != "1" ]; then
-  printf '  \033[33m–\033[0m skipped: opt in with RUN_JULES=1 and supply JULES_API_KEY\n'
-  echo "       No presence test for the key is done here on purpose; the credential"
-  echo "       is supplied per invocation by the caller."
-elif [ -z "${JULES_API_KEY:-}" ]; then
-  no "RUN_JULES=1 but JULES_API_KEY was not supplied in the environment"
-else
-  out=$(timeout 400 docker run --rm --entrypoint python \
-          -v /var/run/docker.sock:/var/run/docker.sock \
-          -v "$ROOT/agents/jules-mcp:/srv/jules-mcp:ro" \
-          -e JULES_API_KEY \
-          "$HARNESS" /srv/jules-mcp/verify.py 2>&1)
-  if grep -q "PASS: Jules is an MCP server" <<<"$out"; then
-    ok "cloakai/jules:mcp speaks MCP with no gateway"
-  else
-    no "cloakai/jules:mcp did not serve over stdio"
-    tail -12 <<<"$out" | sed 's/^/       /'
-  fi
 fi
 
 echo "  $pass passed, $fail failed"

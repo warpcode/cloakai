@@ -138,36 +138,10 @@ bash -c 'export OPENAI_API_KEY="$(...)"; exec docker run -i --rm \
   -e OPENAI_API_KEY cloakai/dev:latest mcp'
 ```
 
-### Jules
-
-The same contract, for a remote autonomous agent where each session is its own
-sandbox. The credential is passed per invocation and is never baked into the image:
-
-```bash
-JULES_API_KEY=$(cloakenv get "kp://Personal/Credentials/Google - Main - Jules - Api Key:Password") \
-  docker run --rm -i -e JULES_API_KEY cloakai/jules:latest mcp
-```
-
-Five tools, because a Jules session is not a `docker run` — it outlives the call
-that created it and can park on a plan gate for 20–30 minutes:
-
-```python
-jules_start("describe your working directory")               # project-less sandbox
-jules_start("add tests", source="github/warpcode/cloakai")   # repo-backed
-jules_status("15497948316305709445")   # state, whether PARKED, PR, timeline
-jules_send(id, "keep the existing assertions")
-jules_approve_plan(id, "p-42")         # write: resumes the run
-```
-
-`jules_status` reports `COMPLETED` and whether the session is genuinely finished.
-Jules sets `COMPLETED` when a runner goes **idle**, so a session waiting on an
-unapproved plan looks identical to a finished one; only a `sessionCompleted`
-marker in the timeline settles it.
-
 ### Checking it still holds
 
 ```bash
-./scripts/check-direct-use.sh    # both images, over stdio, with nothing else running
+./scripts/check-direct-use.sh    # the image, over stdio, with nothing else running
 ```
 
 `scripts/test.sh` runs it. It caught nothing at first, and that is the point — the
@@ -323,9 +297,7 @@ agents/                                   the container
 ├── dev.Dockerfile                        code review and release notes
 ├── big-pickle.Dockerfile                 the free model, no credential
 ├── cloakai-entrypoint.sh                 run-cmd | mcp | mcp-http | shell
-├── isolation-flags                       shared by run.sh AND the isolation tests
-└── jules-mcp/                            the Jules adapter: client, server, verdict
-    └── Dockerfile                        Jules as MCP over stdio
+└── isolation-flags                       shared by run.sh AND the isolation tests
 
 cli/                                      the `cloakai` command
 ├── registry.py                           catalogue, argv, lifecycle
@@ -371,14 +343,14 @@ Phases 0–3 are done, and the gateway planned for the end of it was built and t
 turned out to be unnecessary — every client spawns the container over stdio instead. What works
 now:
 
-- Two agent images, `cloakai/dev` and `cloakai/jules`, each usable with nothing else running.
+- The `cloakai/dev` agent image, usable with nothing else running.
 - Generated stdio entries for opencode, agy, Claude Code, VS Code and OpenHands, in each client's
   own shape.
 - Isolation asserted by `scripts/isolation-tests.sh`, including that a default invocation mounts no
   working directory at all.
 - A model proxy that is the only container able to reach the internet.
 
-Not done: concurrency limiting, and a second agent that is not Jules or `dev`.
+Not done: concurrency limiting, and a second agent image.
 
 `./scripts/test.sh` runs three layers: compiler correctness and determinism (fast, no Docker),
 container isolation (needs the image and the network), and **client conformance** — a real,
