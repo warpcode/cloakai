@@ -56,7 +56,7 @@ head_ "independent use"
 # `docker run --rm <image> mcp` works with nothing else running. This was
 # verified by hand for several turns and by nothing automatic, which is how
 # mcp.json came to point at a service that was never in compose with every test
-# green. RUN_JULES=1 opts the Jules half in; nothing inspects the credential.
+# green.
 if ./scripts/check-direct-use.sh; then
   ok "images are usable directly"
 else
@@ -86,18 +86,6 @@ if python3 -m unittest discover -s cli/tests -t . 2>&1 | tail -3 | grep -q "^OK"
 else
   no "cli unit tests"
   python3 -m unittest discover -s cli/tests -t . 2>&1 | tail -20
-fi
-
-# ---------------------------------------------------------------- jules image
-head_ "jules"
-# The finished-or-parked verdict. Stdlib-only, so it runs here rather than needing
-# the image, and it is the one piece of the Jules image with no live example: a
-# parked session cannot be produced without deliberately abandoning one.
-if python3 -m unittest discover -s agents/jules-mcp -p "test_*.py" -t . 2>&1 | tail -3 | grep -q "^OK"; then
-  ok "verdict unit tests"
-else
-  no "verdict unit tests"
-  python3 -m unittest discover -s agents/jules-mcp -p "test_*.py" -t . 2>&1 | tail -20
 fi
 
 # ---------------------------------------------------------------- compiler
