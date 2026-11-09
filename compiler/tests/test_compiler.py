@@ -466,6 +466,17 @@ class TestLint(Sandbox):
                                 "mcpServers": {"a": {"type": "stdio", "command": "/usr/bin/thing"}}})
         self.assertFailsNaming("bare executable name")
 
+    def test_stdio_command_traversal(self):
+        self.write("mcp.json", {"$schema": MCP_SCHEMA,
+                                "mcpServers": {"a": {"type": "stdio", "command": "./../../bin/sh"}}})
+        self.assertFailsNaming("'command' './../../bin/sh' must not contain '..' path traversal segments")
+
+    def test_stdio_cwd_traversal(self):
+        self.write("mcp.json", {"$schema": MCP_SCHEMA,
+                                "mcpServers": {"a": {"type": "stdio", "command": "node",
+                                                     "cwd": "./../escape"}}})
+        self.assertFailsNaming("'cwd' './../escape' must not contain '..' path traversal segments")
+
     def test_stdio_reserved_env_key(self):
         self.write("mcp.json", {"$schema": MCP_SCHEMA,
                                 "mcpServers": {"a": {"type": "stdio", "command": "x",
