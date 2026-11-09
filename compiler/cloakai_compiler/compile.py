@@ -252,6 +252,10 @@ def emit_catalog(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
     the same kind of file as the per-client MCP entries — generated from
     agent.json, so an agent is added by writing a plugin directory and
     recompiling, with no registry to edit by hand.
+
+    It carries the full argv rather than the fields to reconstruct it from. The
+    CLI therefore holds no isolation policy: it cannot drift from what the plugin
+    declared, because it never decides anything.
     """
     name = agent.get("name") or plugin_root.name
     entrypoints = agent.get("entrypoints") or {}
