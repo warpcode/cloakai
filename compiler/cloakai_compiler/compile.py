@@ -256,11 +256,6 @@ def emit_catalog(plugin_root: Path, agent: dict, out_root: Path) -> list[Path]:
     It carries the full argv rather than the fields to reconstruct it from. The
     CLI therefore holds no isolation policy: it cannot drift from what the plugin
     declared, because it never decides anything.
-
-    NETWORK_PLACEHOLDER rather than a literal name, matching agents/isolation-flags
-    and the scripts that consume it, so CLOAKAI_NETWORK overrides the stack
-    consistently. The earlier version of this emitted `--network internal`, which is
-    the compose SERVICE alias and not a Docker network at all.
     """
     name = agent.get("name") or plugin_root.name
     entrypoints = agent.get("entrypoints") or {}
