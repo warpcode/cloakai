@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import json
 import sys
+import io
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -414,6 +416,59 @@ class RealCatalog(unittest.TestCase):
         for name, spec in reg.agents(reg.load(CATALOG)).items():
             self.assertIn("--read-only", spec["flags"], name)
             self.assertIn("--tmpfs", spec["flags"], name)
+
+
+
+class Status(unittest.TestCase):
+    @unittest.mock.patch("cli.main.shutil.which")
+    @unittest.mock.patch("sys.stderr", new_callable=io.StringIO)
+    def test_no_docker(self, mock_stderr, mock_which):
+        from cli.main import _cmd_status, EXIT_FAILED
+        import argparse
+        mock_which.return_value = None
+        args = argparse.Namespace()
+        self.assertEqual(_cmd_status(args), EXIT_FAILED)
+        self.assertIn("docker is not installed", mock_stderr.getvalue())
+
+    @unittest.mock.patch("cli.main.shutil.which")
+    @unittest.mock.patch("subprocess.run")
+    @unittest.mock.patch("sys.stdout", new_callable=io.StringIO)
+    def test_no_active_agents(self, mock_stdout, mock_run, mock_which):
+        from cli.main import _cmd_status, EXIT_OK
+        import argparse
+        mock_which.return_value = "/usr/bin/docker"
+        mock_result = unittest.mock.MagicMock()
+        mock_result.stdout = ""
+        mock_run.return_value = mock_result
+        args = argparse.Namespace()
+        self.assertEqual(_cmd_status(args), EXIT_OK)
+        self.assertIn("No active agents.", mock_stdout.getvalue())
+
+    @unittest.mock.patch("cli.main.shutil.which")
+    @unittest.mock.patch("subprocess.run")
+    @unittest.mock.patch("sys.stdout", new_callable=io.StringIO)
+    def test_active_agents(self, mock_stdout, mock_run, mock_which):
+        from cli.main import _cmd_status, EXIT_OK
+        import argparse
+        mock_which.return_value = "/usr/bin/docker"
+        mock_result = unittest.mock.MagicMock()
+        mock_result.stdout = "abc123def456\tdev\t2 minutes ago\tUp 2 minutes\n"
+        mock_run.return_value = mock_result
+        args = argparse.Namespace()
+        self.assertEqual(_cmd_status(args), EXIT_OK)
+        output = mock_stdout.getvalue()
+        self.assertIn("CONTAINER ID", output)
+        self.assertIn("abc123def456", output)
+        self.assertIn("dev", output)
+        self.assertIn("2 minutes ago", output)
+
+    def test_parser_has_status_and_ps(self):
+        from cli.main import build_parser
+        parser = build_parser()
+        args = parser.parse_args(["status"])
+        self.assertEqual(args.func.__name__, "_cmd_status")
+        args_ps = parser.parse_args(["ps"])
+        self.assertEqual(args_ps.func.__name__, "_cmd_status")
 
 
 if __name__ == "__main__":
