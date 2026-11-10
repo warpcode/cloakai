@@ -119,11 +119,10 @@ def label_for_call(instance: str) -> list[str]:
     ]
 
 
-def sweep(max_lifetime: float, now: float | None = None, dry_run: bool = False) -> list[Reaped]:
+def sweep(max_lifetime: float, now: float | None = None, dry_run: bool = False) -> tuple[int, list[Reaped]]:
     """Kill labelled containers older than the maximum call lifetime.
 
-    Returns what it reaped. An empty list is the healthy case, so callers must
-    not treat "nothing reaped" as "nothing found" without checking the count.
+    Returns a tuple of (number of scanned containers, what it reaped).
     """
     now = now if now is not None else time.time()
     rc, out = docker("ps", "-q", "--filter", f"label={LABEL}=1", check=False)
@@ -132,7 +131,7 @@ def sweep(max_lifetime: float, now: float | None = None, dry_run: bool = False) 
 
     cids = out.split()
     if not cids:
-        return []
+        return 0, []
 
     # Batch inspect all candidate containers in a single sub-process invocation.
     all_labels = batch_call_labels(cids)
@@ -154,21 +153,29 @@ def sweep(max_lifetime: float, now: float | None = None, dry_run: bool = False) 
         if not dry_run:
             docker("rm", "-f", cid, check=False)
 
-    return reaped
+    return len(cids), reaped
 
 
-def report(reaped: list[Reaped], dry_run: bool) -> None:
+def report(scanned: int, reaped: list[Reaped], dry_run: bool, json_out: bool = False) -> None:
+    if json_out:
+        out = {
+            "scanned": scanned,
+            "reaped": [{"cid": r.cid, "instance": r.instance, "age": r.age} for r in reaped]
+        }
+        print(json.dumps(out))
+        return
+
     verb = "would reap" if dry_run else "reaped"
     for r in reaped:
         print(f"  {verb} {r.cid} (instance {r.instance}, age {r.age:.0f}s)", file=sys.stderr)
 
 
-def loop(max_lifetime: float, interval: float, dry_run: bool) -> None:
+def loop(max_lifetime: float, interval: float, dry_run: bool, json_out: bool = False) -> None:
     while True:
         try:
-            reaped = sweep(max_lifetime, dry_run=dry_run)
-            if reaped:
-                report(reaped, dry_run)
+            scanned, reaped = sweep(max_lifetime, dry_run=dry_run)
+            if reaped or json_out:
+                report(scanned, reaped, dry_run, json_out)
         except Exception as exc:  # noqa: BLE001 — a reaper must not die
             print(f"  sweep failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         time.sleep(interval)
@@ -186,6 +193,7 @@ def main() -> int:
     ap.add_argument("--print-instance-id", action="store_true",
                     help="print a fresh instance id and exit (for labelling at startup)")
     ap.add_argument("--dry-run", action="store_true", help="report without killing")
+    ap.add_argument("--json", action="store_true", help="output JSON summary")
     args = ap.parse_args()
 
     if args.print_instance_id:
@@ -193,16 +201,16 @@ def main() -> int:
         return 0
 
     if args.interval:
-        loop(args.max_lifetime, args.interval, args.dry_run)
+        loop(args.max_lifetime, args.interval, args.dry_run, args.json)
         return 0
 
-    reaped = sweep(args.max_lifetime, dry_run=args.dry_run)
+    scanned, reaped = sweep(args.max_lifetime, dry_run=args.dry_run)
     # Report whenever there is something to report. This was gated on
     # `if not args.dry_run`, which made --dry-run print NOTHING — the one mode whose
     # entire purpose is to tell an operator what it would do. `report()` already
     # says "would reap" for that case; the gate just stopped it being called.
-    if reaped:
-        report(reaped, args.dry_run)
+    if reaped or args.json:
+        report(scanned, reaped, args.dry_run, args.json)
     return 0
 
 
