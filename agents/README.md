@@ -9,7 +9,7 @@ The container that wraps the agent. Not the agent's configuration — that lives
 ```
 agents/
 ├── dev.Dockerfile              the image: two modes off one config
-├── cloakai-entrypoint.sh       run | mcp | shell
+├── cloakai-entrypoint.sh       run-cmd | mcp | mcp-http | shell
 ├── cloakai-healthcheck.sh      a real MCP probe for compose
 └── isolation-flags             THE flag set, shared by run.sh and the tests
 ```

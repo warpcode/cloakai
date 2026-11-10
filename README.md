@@ -291,7 +291,7 @@ compiler/cloakai_compiler/
 ├── strategies.py                         one per output shape, dispatched from the table
 ├── compile.py                            the four rules
 ├── validate.py                           every lint check; all fail loudly
-└── tests/                                67 tests
+└── tests/                                70 tests
 
 agents/                                   the container
 ├── dev.Dockerfile                        code review and release notes
@@ -350,7 +350,7 @@ now:
   working directory at all.
 - A model proxy that is the only container able to reach the internet.
 
-Not done: concurrency limiting, and a second agent image.
+Not done: concurrency limiting.
 
 `./scripts/test.sh` runs three layers: compiler correctness and determinism (fast, no Docker),
 container isolation (needs the image and the network), and **client conformance** — a real,
