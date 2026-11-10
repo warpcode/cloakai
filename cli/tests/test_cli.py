@@ -254,12 +254,22 @@ class PromptSafety(unittest.TestCase):
             extra = {"CUSTOM_VAR": "secret_val"}
             line = reg.build_argv(ONE, "dev", shape, prompt="test prompt", extra_env=extra)
             image_at = line.index(SPEC["image"])
-            self.assertIn("CUSTOM_VAR=secret_val", line)
-            env_val_at = line.index("CUSTOM_VAR=secret_val")
+            self.assertIn("CUSTOM_VAR", line)
+            self.assertNotIn("CUSTOM_VAR=secret_val", line)
+            self.assertNotIn("secret_val", line)
+            env_val_at = line.index("CUSTOM_VAR")
             self.assertLess(
                 env_val_at, image_at,
                 f"For {shape}, --env flag must come before image at index {image_at}; got index {env_val_at} in {line}"
             )
+
+    def test_extra_env_does_not_leak_values_in_argv(self):
+        """Security: Verify secret values in extra_env are not embedded in argv."""
+        for shape in ("agents", "mcp"):
+            extra = {"API_SECRET_KEY": "sk-super-secret-token-12345"}
+            line = reg.build_argv(ONE, "dev", shape, prompt="test prompt", extra_env=extra)
+            self.assertIn("API_SECRET_KEY", line)
+            self.assertFalse(any("sk-super-secret-token-12345" in arg for arg in line))
 
 
 class CallerErrors(unittest.TestCase):
