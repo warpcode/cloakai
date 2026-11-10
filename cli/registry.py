@@ -141,11 +141,11 @@ def build_env(
             value = value.replace(token, actual)
         out += ["--env", f"{var}={value}"]
     if extra_env:
-        for var, value in sorted(extra_env.items()):
-            if value is not None:
-                out += ["--env", f"{var}={value}"]
-            else:
-                out += ["--env", var]
+        # Security: Pass only the variable name `--env VAR` so Docker reads the value
+        # from the process environment rather than embedding sensitive secrets into argv,
+        # which would expose them in the host process list (e.g. via `ps`).
+        for var in sorted(extra_env.keys()):
+            out += ["--env", var]
     return out
 
 
@@ -262,7 +262,11 @@ def run_agents(
     get(doc, name)
     argv = build_argv(doc, name, "agents", prompt=prompt, extra_env=env)
     try:
-        done = subprocess.run(argv, check=False, timeout=timeout)
+        # Pass extra env vars via process environment rather than argv
+        spawn_env = os.environ.copy()
+        if env:
+            spawn_env.update({k: str(v) for k, v in env.items() if v is not None})
+        done = subprocess.run(argv, check=False, timeout=timeout, env=spawn_env)
         return done.returncode
     except subprocess.TimeoutExpired:
         # The container is --rm, so it goes when this process does.
@@ -283,7 +287,11 @@ def run_mcp(doc: dict[str, Any], name: str, *, env: dict[str, str] | None = None
     """
     get(doc, name)
     argv = build_argv(doc, name, "mcp", extra_env=env)
-    os.execvp("docker", argv)
+    # Pass extra env vars via process environment rather than argv
+    spawn_env = os.environ.copy()
+    if env:
+        spawn_env.update({k: str(v) for k, v in env.items() if v is not None})
+    os.execvpe("docker", argv, spawn_env)
     return 127  # only reached if execvp fails
 
 # ---------------------------------------------------------------- doctor probes
