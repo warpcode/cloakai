@@ -461,6 +461,16 @@ class TestLint(Sandbox):
                                 "mcpServers": {"a": {"type": "sse", "url": "http://x/mcp#f"}}})
         self.assertFailsNaming("fragment")
 
+    def test_remote_url_without_hostname(self):
+        self.write("mcp.json", {"$schema": MCP_SCHEMA,
+                                "mcpServers": {"a": {"type": "sse", "url": "http:///mcp"}}})
+        self.assertFailsNaming("valid hostname")
+
+    def test_remote_url_non_http_scheme(self):
+        self.write("mcp.json", {"$schema": MCP_SCHEMA,
+                                "mcpServers": {"a": {"type": "sse", "url": "ftp://example.com/mcp"}}})
+        self.assertFailsNaming("must be absolute http or https")
+
     def test_stdio_command_not_bare_or_relative(self):
         self.write("mcp.json", {"$schema": MCP_SCHEMA,
                                 "mcpServers": {"a": {"type": "stdio", "command": "/usr/bin/thing"}}})
