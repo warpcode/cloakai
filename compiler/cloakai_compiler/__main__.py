@@ -11,6 +11,7 @@ destinations are now threaded through explicitly and cleaned together.
 from __future__ import annotations
 
 import argparse
+import filecmp
 import shutil
 import sys
 from pathlib import Path
@@ -26,6 +27,48 @@ from . import validate as V
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = "dist"
 CLIENTS_DIR = "clients"
+
+
+def _check_drift(actual: Path, expected: Path) -> list[str]:
+    """Compare two directories and return a list of drifted files.
+
+    Returns paths relative to the expected root that differ, are missing,
+    or are unexpected.
+    """
+    drift = []
+
+    if not expected.exists() and not actual.exists():
+        return drift
+
+    def compare_dirs(dir_actual: Path, dir_expected: Path, base_rel: Path):
+        cmp = filecmp.dircmp(dir_actual, dir_expected)
+
+        for name in cmp.diff_files:
+            drift.append(str(base_rel / name))
+
+        for name in cmp.right_only:
+            drift.append(str(base_rel / name))
+
+        for name in cmp.left_only:
+            drift.append(str(base_rel / name))
+
+        for name in cmp.common_dirs:
+            compare_dirs(dir_actual / name, dir_expected / name, base_rel / name)
+
+    if expected.exists() and not actual.exists():
+        for path in expected.rglob("*"):
+            if path.is_file():
+                drift.append(str(path.relative_to(expected)))
+        return drift
+
+    if actual.exists() and not expected.exists():
+        for path in actual.rglob("*"):
+            if path.is_file():
+                drift.append(str(path.relative_to(actual)))
+        return drift
+
+    compare_dirs(actual, expected, Path("."))
+    return sorted(drift)
 
 
 def clean_output(dist_root: Path, clients_root: Path) -> None:
@@ -95,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--clients-out", default=CLIENTS_DIR, help="directory for generated config files")
     ap.add_argument("--keep", action="store_true", help="do not clean the output directories first")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--check", action="store_true", help="verify compiled output matches dist/ without modifying it")
     args = ap.parse_args(argv)
 
     # Relative output paths resolve against cwd; absolute ones are used as given.
@@ -107,8 +151,30 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {root} is not a directory", file=sys.stderr)
             return 2
 
-    if not args.keep:
-        clean_output(dist_root, clients_root)
+    if args.check:
+        import tempfile
+        tmp_dir = tempfile.TemporaryDirectory()
+        tmp_path = Path(tmp_dir.name)
+        compile_dist_root = tmp_path / "dist"
+        compile_clients_root = tmp_path / "clients"
+
+        if args.keep:
+            if dist_root.exists():
+                shutil.copytree(dist_root, compile_dist_root)
+            else:
+                compile_dist_root.mkdir()
+            if clients_root.exists():
+                shutil.copytree(clients_root, compile_clients_root)
+            else:
+                compile_clients_root.mkdir()
+        else:
+            compile_dist_root.mkdir()
+            compile_clients_root.mkdir()
+    else:
+        compile_dist_root = dist_root
+        compile_clients_root = clients_root
+        if not args.keep:
+            clean_output(dist_root, clients_root)
 
     written: list[Path] = []
     try:
@@ -119,10 +185,35 @@ def main(argv: list[str] | None = None) -> int:
         # clean_output runs once above, not per plugin, so a second plugin cannot
         # delete the first plugin's output.
         for root in plugin_roots:
-            written += compile_plugin(root, dist_root, clients_root)
+            written += compile_plugin(root, compile_dist_root, compile_clients_root)
     except V.ValidationError as e:
         print(f"validation failed: {e}", file=sys.stderr)
+        if args.check:
+            tmp_dir.cleanup()
         return 1
+
+    if args.check:
+        drift_dist = _check_drift(compile_dist_root, dist_root)
+        drift_clients = _check_drift(compile_clients_root, clients_root)
+
+        tmp_dir.cleanup()
+
+        drifted = False
+        if drift_dist:
+            print("error: out-of-sync files in dist/:", file=sys.stderr)
+            for path in drift_dist:
+                print(f"  {path}", file=sys.stderr)
+            drifted = True
+
+        if drift_clients:
+            print("error: out-of-sync files in clients/:", file=sys.stderr)
+            for path in drift_clients:
+                print(f"  {path}", file=sys.stderr)
+            drifted = True
+
+        if drifted:
+            return 1
+        return 0
 
     if not args.quiet:
         names = ", ".join(r.name for r in plugin_roots)

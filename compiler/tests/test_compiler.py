@@ -24,11 +24,14 @@ from cloakai_compiler import validate as V  # noqa: E402
 from cloakai_compiler.clients import ANTIGRAVITY_SCHEMA, MCP_SCHEMA, PLUGIN_SCHEMA  # noqa: E402
 
 
-def run_compiler(plugin: Path, cwd: Path, out: str = "dist", clients: str = "clients") -> subprocess.CompletedProcess:
+def run_compiler(plugin: Path, cwd: Path, out: str = "dist", clients: str = "clients", extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
     """Invoke the real entry point, so exit codes are the ones a user would see."""
+    cmd = [sys.executable, "-m", "cloakai_compiler", str(plugin),
+           "--out", out, "--clients-out", clients, "--quiet"]
+    if extra_args:
+        cmd.extend(extra_args)
     return subprocess.run(
-        [sys.executable, "-m", "cloakai_compiler", str(plugin),
-         "--out", out, "--clients-out", clients, "--quiet"],
+        cmd,
         cwd=cwd, env={"PYTHONPATH": str(REPO / "compiler"), "PATH": "/usr/bin:/bin"},
         capture_output=True, text=True,
     )
@@ -659,6 +662,53 @@ class TestLint(Sandbox):
         self.assertIn('"model\\n  injected: true"', text)
         self.assertIn('"http://litellm:4000/v1\\n  injected: true"', text)
 
+
+class TestCheckFlag(Sandbox):
+    def test_check_no_drift(self):
+        # First compile normally to populate outputs
+        r = self.compile()
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+        # Then compile with --check, which should exit 0 and not modify anything
+        r = run_compiler(self.plugin, self.cwd, extra_args=["--check"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stderr, "")
+
+    def test_check_modified_file(self):
+        r = self.compile()
+        self.assertEqual(r.returncode, 0)
+
+        agents_json = self.cwd / "dist" / "agents.json"
+        agents_json.write_text("{}")
+
+        r = run_compiler(self.plugin, self.cwd, extra_args=["--check"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: out-of-sync files in dist/", r.stderr)
+        self.assertIn("agents.json", r.stderr)
+
+    def test_check_missing_file(self):
+        r = self.compile()
+        self.assertEqual(r.returncode, 0)
+
+        agents_json = self.cwd / "dist" / "agents.json"
+        agents_json.unlink()
+
+        r = run_compiler(self.plugin, self.cwd, extra_args=["--check"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: out-of-sync files in dist/", r.stderr)
+        self.assertIn("agents.json", r.stderr)
+
+    def test_check_extra_file(self):
+        r = self.compile()
+        self.assertEqual(r.returncode, 0)
+
+        extra_file = self.cwd / "dist" / "extra.json"
+        extra_file.write_text("{}")
+
+        r = run_compiler(self.plugin, self.cwd, extra_args=["--check"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("error: out-of-sync files in dist/", r.stderr)
+        self.assertIn("extra.json", r.stderr)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
