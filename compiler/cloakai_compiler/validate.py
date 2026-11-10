@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -209,13 +210,16 @@ def check_server_entry(entry: Any, where: str) -> None:
 
 
 def check_remote_url(url: str, where: str) -> None:
-    # Performance optimization: fast string prefix check (~4x faster than re.match for http/https URLs)
-    if not url.startswith(("http://", "https://")):
-        _fail(where, f"'url' must be absolute, got {url!r}")
-    if "#" in url:
+    # Security: Parse and strictly validate remote MCP server URLs to prevent
+    # malformed URLs, missing hostnames, credential leakage in URLs, or fragment tricks.
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https"):
+        _fail(where, f"'url' must be absolute http or https, got {url!r}")
+    if not parsed.hostname or not parsed.hostname.strip():
+        _fail(where, f"'url' must include a valid hostname, got {url!r}")
+    if parsed.fragment or "#" in url:
         _fail(where, f"'url' must not contain a fragment, got {url!r}")
-    authority = url.split("://", 1)[1].split("/", 1)[0]
-    if "@" in authority:
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
         _fail(where, f"'url' must not contain user info, got {url!r}")
 
 
