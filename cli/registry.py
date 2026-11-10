@@ -139,13 +139,14 @@ def build_env(
         value = str(template)
         for token, actual in replacements.items():
             value = value.replace(token, actual)
-        out += ["--env", f"{var}={value}"]
+        # Performance optimization: tuple extend avoids temporary list allocation during flag construction
+        out.extend(("--env", f"{var}={value}"))
     if extra_env:
         for var, value in sorted(extra_env.items()):
             if value is not None:
-                out += ["--env", f"{var}={value}"]
+                out.extend(("--env", f"{var}={value}"))
             else:
-                out += ["--env", var]
+                out.extend(("--env", var))
     return out
 
 

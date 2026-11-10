@@ -435,6 +435,18 @@ class TestLint(Sandbox):
         self.assertIsNone(V.schema_version("https://example.com/x.json"))
         self.assertIsNone(V.schema_version(None))
 
+    def test_allowed_server_types_constant(self):
+        self.assertEqual(V.ALLOWED_SERVER_TYPES, {"stdio", "streamable-http", "sse"})
+        # Valid server types
+        for valid_type in V.ALLOWED_SERVER_TYPES:
+            entry = {"type": valid_type, "command": "echo"} if valid_type == "stdio" else {"type": valid_type, "url": "http://x/mcp"}
+            # Should not raise validation error for allowed types
+            V.check_server_entry(entry, "test")
+        # Invalid server type
+        with self.assertRaises(V.ValidationError) as ctx:
+            V.check_server_entry({"type": "grpc", "url": "http://x/mcp"}, "test")
+        self.assertIn("'type' must be one of", str(ctx.exception))
+
     def test_mcp_server_unknown_type(self):
         self.write("mcp.json", {"$schema": MCP_SCHEMA,
                                 "mcpServers": {"a": {"type": "grpc", "url": "http://x/mcp"}}})
