@@ -20,7 +20,7 @@ import json
 import sys
 import io
 import unittest
-from unittest import mock
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -270,6 +270,23 @@ class PromptSafety(unittest.TestCase):
             line = reg.build_argv(ONE, "dev", shape, prompt="test prompt", extra_env=extra)
             self.assertIn("API_SECRET_KEY", line)
             self.assertFalse(any("sk-super-secret-token-12345" in arg for arg in line))
+
+    def test_extra_env_invalid_var_names_rejected(self):
+        """Security: Verify malformed or dangerous environment variable names are rejected."""
+        invalid_names = [
+            "BAD=VAL",
+            "123_INVALID",
+            "VAR-WITH-DASHES",
+            "VAR WITH SPACES",
+            "--privileged",
+            "FOO;BAR",
+            "VAR$NAME",
+            "",
+        ]
+        for bad_var in invalid_names:
+            for shape in ("agents", "mcp"):
+                with self.assertRaises(reg.CliError, msg=f"Should reject {bad_var!r} for {shape}"):
+                    reg.build_argv(ONE, "dev", shape, prompt="test prompt", extra_env={bad_var: "val"})
 
 
 class CallerErrors(unittest.TestCase):
