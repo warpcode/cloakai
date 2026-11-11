@@ -43,6 +43,8 @@ def pairs(argv: list[str]) -> list[str]:
             pending = token
         else:
             out.append(token)
+    if pending is not None:
+        out.append(pending)
     return sorted(out)
 
 
