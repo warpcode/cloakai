@@ -366,8 +366,36 @@ needs an authenticated Copilot session — the blocker is a signed-in session, n
 covered instead by static analysis of the shipped workbench bundle; see
 [docs/verification/phase-0.md](docs/verification/phase-0.md) Check 2.
 
+## Known debt
+
+### Move dist/ from committed to CI-generated (#16)
+
+`dist/` — the generated per-client plugin trees — is deliberately committed to git in this
+phase so that a clone is immediately installable with no build step:
+
+```bash
+git clone https://github.com/warpcode/cloakai
+agy plugin install ./dist/dev/google.antigravity    # works straight away
+```
+
+This matches how the ecosystems we target actually work. VS Code's `chat.pluginLocations` takes a
+local directory; OpenHands installs from a local path; agy has `agy plugin install /path/to/plugin`.
+Making contributors run a compiler before they can try the plugin is an adoption tax.
+The cost is generated files appearing in diffs, potential drift if the compiler is not run,
+and duplicated per-client frontmatter.
+
+**Exit conditions to move generation to CI:**
+- The compiler has unit tests covering all four rules, including lint rules from Phase 1 Task 4.
+- The agy frontmatter schema is confirmed and vendored (Phase 0 Check 5) — until then, committing
+  the generated tree preserves diagnostic value.
+- A CI job publishes generated trees somewhere a client can fetch (release asset, container image, or git branch).
+- Install instructions work against the published artefact rather than the working tree.
+
+Until then, `scripts/compile.sh` is run and committed manually.
+
 Issues: [#11 epic](https://github.com/warpcode/cloakai/issues/11) ·
 [#12 Phase 0](https://github.com/warpcode/cloakai/issues/12) ·
 [#13 Phase 1](https://github.com/warpcode/cloakai/issues/13) ·
 [#14 Phase 2](https://github.com/warpcode/cloakai/issues/14) ·
-[#15 Phase 3](https://github.com/warpcode/cloakai/issues/15)
+[#15 Phase 3](https://github.com/warpcode/cloakai/issues/15) ·
+[#16 Move dist/ to CI](https://github.com/warpcode/cloakai/issues/16)
