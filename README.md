@@ -27,6 +27,7 @@ cloakai prompt big-pickle "what is 1+1"   # one task, then destroyed
 cloakai agents dev "review this"    # the same thing, spelled out
 cloakai mcp dev                     # long-lived: stdio until stdin closes, then destroyed
 cloakai show dev                    # one agent's catalogue entry, as JSON
+cloakai status                      # list active agent containers
 cloakai doctor                      # is anything actually runnable
 ```
 
@@ -291,7 +292,7 @@ compiler/cloakai_compiler/
 ├── strategies.py                         one per output shape, dispatched from the table
 ├── compile.py                            the four rules
 ├── validate.py                           every lint check; all fail loudly
-└── tests/                                70 tests
+└── tests/                                76 tests
 
 agents/                                   the container
 ├── dev.Dockerfile                        code review and release notes
@@ -301,7 +302,7 @@ agents/                                   the container
 
 cli/                                      the `cloakai` command
 ├── registry.py                           catalogue, argv, lifecycle
-└── main.py                               agents | prompt | mcp | show | doctor
+└── main.py                               agents | prompt | mcp | show | status | doctor
 
 infra/conformance/                        real-client conformance harness
 

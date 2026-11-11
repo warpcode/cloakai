@@ -5,6 +5,7 @@
     cloakai agents dev "review this"    the same thing, spelled out
     cloakai mcp dev                    serve stdio until stdin closes, then destroyed
     cloakai show dev                   what the catalogue says about one agent
+    cloakai status                     list active agent containers
     cloakai doctor                     is anything actually runnable
 
 Two shapes, matching the two ways an agent is used:
