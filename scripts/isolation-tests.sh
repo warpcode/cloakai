@@ -77,6 +77,12 @@ proxy_up=0
 # DNS-by-service-name was a compose property. There are no compose services now, so
 # this resolves only if the caller has a container on the network whose name matches.
 
+if python3 -c '
+import sys; sys.path.append("scripts"); import importlib; check_parity = importlib.import_module("check-isolation-parity")
+assert check_parity.pairs(["--tmpfs"]) == ["--tmpfs"]
+assert check_parity.pairs(["--tmpfs", "/tmp", "--tmpfs"]) == ["--tmpfs", "--tmpfs=/tmp"]
+' >/dev/null 2>&1; then ok "preflight: check-isolation-parity unit tests pass"; else no "preflight: check-isolation-parity unit tests FAILED"; fi
+
 head_ "isolation"
 
 # --- 1. no docker socket -----------------------------------------------------
