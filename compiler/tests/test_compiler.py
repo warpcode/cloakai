@@ -443,6 +443,9 @@ class TestLint(Sandbox):
                                 "mcpServers": {"a": {"type": "grpc", "url": "http://x/mcp"}}})
         self.assertFailsNaming("'type' must be one of")
 
+    def test_allowed_server_types_constant(self):
+        self.assertEqual(V.ALLOWED_SERVER_TYPES, {"stdio", *V.REMOTE_TYPES})
+
     def test_remote_server_extra_field(self):
         self.write("mcp.json", {"$schema": MCP_SCHEMA,
                                 "mcpServers": {"a": {"type": "sse", "url": "http://x/mcp",
