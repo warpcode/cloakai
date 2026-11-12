@@ -142,7 +142,7 @@ def build_env(
         value = str(template)
         for token, actual in replacements.items():
             value = value.replace(token, actual)
-        out += ["--env", f"{var}={value}"]
+        out.extend(("--env", f"{var}={value}"))
     if extra_env:
         # Security: Pass only the variable name `--env VAR` so Docker reads the value
         # from the process environment rather than embedding sensitive secrets into argv,
@@ -151,7 +151,7 @@ def build_env(
         for var in sorted(extra_env.keys()):
             if not isinstance(var, str) or not ENV_NAME_RE.match(var):
                 raise CliError(f"invalid environment variable name '{var}'; must match {ENV_NAME_RE.pattern}")
-            out += ["--env", var]
+            out.extend(("--env", var))
     return out
 
 
