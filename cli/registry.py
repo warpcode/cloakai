@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -28,6 +29,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 DEFAULT_CATALOG = Path(__file__).resolve().parent.parent / "dist" / "agents.json"
 
@@ -144,7 +147,10 @@ def build_env(
         # Security: Pass only the variable name `--env VAR` so Docker reads the value
         # from the process environment rather than embedding sensitive secrets into argv,
         # which would expose them in the host process list (e.g. via `ps`).
+        # Validate variable names to prevent option injection, flag corruption, or malformed flags.
         for var in sorted(extra_env.keys()):
+            if not isinstance(var, str) or not ENV_NAME_RE.match(var):
+                raise CliError(f"invalid environment variable name '{var}'; must match {ENV_NAME_RE.pattern}")
             out += ["--env", var]
     return out
 
